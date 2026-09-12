@@ -1,0 +1,6 @@
+interface:
+  display_name: "Linear PM"
+  short_description: "現行Projectから実行・評価・訂正を進め、成果と未達を次の担当へ引き継ぐ"
+  default_prompt: "$linear-pm を使い、指定Projectの現在計画と原要求・正本から今回の責任を実行し、実結果に基づく評価・訂正・引継ぎまで進めてください。"
+policy:
+  allow_implicit_invocation: false
