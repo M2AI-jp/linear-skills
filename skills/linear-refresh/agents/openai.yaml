@@ -1,0 +1,6 @@
+interface:
+  display_name: "Linear Refresh"
+  short_description: "指定された原要求と既存実態から、全体範囲・依存・受入を備えた計画を整理"
+  default_prompt: "$linear-refresh を使い、指定対象の原要求と正本・既存実態から計画を構築または再整理し、未確定判断と次の担当への引継ぎを明確にしてください。"
+policy:
+  allow_implicit_invocation: false
