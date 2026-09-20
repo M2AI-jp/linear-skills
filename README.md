@@ -1,32 +1,29 @@
-# Linear skills and Codex Hooks
+# Linear skills
 
-Skills and Codex Hooks for planning and carrying out work in a designated Linear Project, including code, documents, external services and human handoffs. Use the requirements, source of truth and permissions supplied by the destination workspace.
+指定したLinear Projectの計画・実行・訂正・保守を、Codexと通常のツールで進める3つのスキルです。コード、資料、外部サービス、人への引継ぎを扱います。
 
-| Skill | Explicit use |
+| スキル | 役割 |
 |---|---|
-| [linear](skills/linear/SKILL.md) | `$linear` selects Refresh or PM and passes the target and source of truth. |
-| [linear-refresh](skills/linear-refresh/SKILL.md) | `$linear-refresh` builds or reorganizes a plan from requirements and existing work. |
-| [linear-pm](skills/linear-pm/SKILL.md) | `$linear-pm` executes, evaluates, corrects and resumes the current plan. |
+| [linear](skills/linear/SKILL.md) | 対象・正本・依頼から必要なRefresh／PMを選ぶ入口 |
+| [linear-refresh](skills/linear-refresh/SKILL.md) | 原要求と指定実態から計画を構築・再整理 |
+| [linear-pm](skills/linear-pm/SKILL.md) | 現在計画から実行・評価・訂正・保守・再開 |
 
-All three set `allow_implicit_invocation: false`. Invoke them explicitly, or have an existing, deliberately configured workspace entry call them. Discovery alone does not authorize unrelated work. State and acceptance rules live in the [shared contract](skills/linear/references/contract.md); Hook behavior and supported integration/deletion routes are in [hooks/README.md](hooks/README.md).
+状態と受入の規則は[共通契約](skills/linear/references/contract.md)が所有します。Hookは同梱せず、起動・実行・完了評価に必要ありません。外部結果と必要な受入はCodexが確認します。
 
-## Install and verify
+## 導入と利用
 
-These are setup instructions, not a claim that the files or permissions already exist at your destination.
+1. 操作するProject、原要求・正本、許可された範囲を特定し、通常のLinear MCP接続を用意します。Git／GitHubはコードやリポジトリを扱う場合だけ必要です。
+2. 3つのスキルフォルダを、利用先の`.agents/skills/`へ兄弟フォルダとして配置します。`references/`と`agents/openai.yaml`を含む全体を同じ版で配置し、同名の重複導入を避けます。
+3. 利用先のAGENTS.mdに、その利用先のProject、正本、実際のlinear/SKILL.mdへの参照と呼出しを記載します。開発用のルートAGENTS.mdとSSOT.mdはコピーしません。
+4. `$linear`を明示するか、設定したAGENTSの入口から開始します。「現状を説明して」は読取と回答、「計画を整理して実行して」はRefresh→PM、「現在計画から続けて」はPMが担当します。3スキルの`allow_implicit_invocation: false`は維持します。
+5. 最初は指定Projectの読取で接続を確認し、許可された対象で実行・訂正・読戻し・再開を確認します。配置や構文合格だけでは業務で有効と認定しません。
 
-1. Choose a working folder and the one Linear Project it will manage. A repository is optional. Have Python 3.9+, a working Linear MCP connection, and the existing `linear-api` executable on the Hook process's PATH. The adapter must accept GraphQL JSON on stdin and return JSON on stdout. **The current adapter depends on an environment-specific Mac/Keychain connection and is not supplied here.** Without a compatible, already authenticated adapter, these Hooks cannot operate. GitHub integration additionally requires Git and an authenticated `gh` with access to the repository, protection and check results; non-code work does not require Git or GitHub.
-2. Copy the complete `skills/linear`, `skills/linear-refresh` and `skills/linear-pm` directories as siblings into the working folder's `.agents/skills/`, retaining `references/` and `agents/openai.yaml`. Codex uses this standard discovery location; user-scoped `~/.agents/skills/` is also available, including for work without a repository. Avoid duplicate installations with the same skill names. See [Codex skill discovery](https://learn.chatgpt.com/docs/build-skills).
-3. In the working folder's own `AGENTS.md` (or existing `SSOT.md`), put a standalone `Linear Project ID: UUID` line with the actual target ID. In `AGENTS.md`, explicitly link the installed `.agents/skills/linear/SKILL.md` (use its actual location for user-scoped installation) and instruct Codex to read and use it for this Project at start and resume. Identify the raw requirements, source of truth and operating scope already adopted by the user or caller. Where autonomous correction is adopted for this Project, explain that a mismatch stops dependent operations while Codex checks the raw request, adopted decisions and real results; uniquely established, already authorized corrections are performed and read back without asking again merely because a mismatch was found. Unresolved adoption, recipients or permissions wait for the relevant user's decision while independent work continues. This records the adopted Project policy, grants no new permission and does not override explicit higher-level requirements for user confirmation. Do not edit global AGENTS. For intentional new construction use `Linear Project ID: 未作成`, then replace it with the created Project ID and retain the actual skill reference and adopted scope. If AGENTS and SSOT both specify an ID, they must agree. Do not copy this development repository's root AGENTS or SSOT into another workspace. A local SSOT is not required for non-code work.
-4. Create `hooks/` directly under that working folder and copy **all four production files from the same version**: `runtime.py`, `linear_read.py`, `github_read.py`, `linear_delete.py`. Test modules are not runtime dependencies. Keep the files together: runtime imports both adapters and the deletion module, and derives the entry folder from its own location.
-5. Merge the event definitions from [.codex/hooks.json](.codex/hooks.json) into the destination's native `.codex/hooks.json`, replacing **every** command's source path with the absolute path to the destination `hooks/runtime.py`. Preserve existing unrelated settings. Set `hooks = true` under `[features]` in the destination `.codex/config.toml`. Review and trust the project configuration and exact Hook definitions through Codex's normal UI; the CLI provides `/hooks`. Do not edit trust records or use trust-bypass flags. See [Hook trust](https://learn.chatgpt.com/docs/hooks).
-6. Open Codex in that working folder, confirm the three skills are discoverable and the Hooks are trusted, then try a read-only request: `$linear-pm: Read the Project named by this folder's entry and summarize its current plan; make no changes.` Confirm the retrieved target. Test refusals, authorized corrections and readback only within an explicitly authorized trial scope before adopting the setup.
+Hook用Python、linear-api、隔離判定CLI、Hookの信頼設定は不要です。既存のこのパッケージのHookを撤去する場合は、Linear用イベント定義と専用ファイルだけを除き、他用途のHookや設定は保持します。
 
-## Package contents and limits
+## 配布と受入
 
-Distribute the three complete skill directories, four production Hook files, this README, the Hook README and responsibility entry, and the native Hook configuration as a destination-specific template. Keep the source README unchanged in the published package. Exclude this development workspace's root AGENTS, private SSOT, task/session history, local tools and authentication adapter. The destination supplies its own Project entry and existing authenticated connections. If the skill directories are already maintained under the destination's `skills/`, use relative symlinks from `.agents/skills/` to those directories instead of creating a second copy.
+配布対象は3つの完全なスキルフォルダとこのREADMEです。個人用tools、資格情報、開発用AGENTS／SSOT、セッション履歴を含めません。対象と認証は利用先が提供します。
 
-The `linear-api` adapter is an external prerequisite; this package does not install credentials or implement that adapter. All four Hook files must remain together. Replace every runtime command path in `.codex/hooks.json` with the destination's absolute path before reviewing and trusting the exact definitions through the normal UI.
+通常の利用から、計画の妥当性、実行した結果、状態訂正、Doneを維持する保守、部分反映からの重複なし再開を確認します。スキル自体の動作と業務の外部成果は別々に評価します。未実施の導入経路は未確認のまま残します。
 
-Local protocol tests use simulated service results. Adoption requires observing the installed version through the destination's trusted CLI or Desktop: correct target retrieval, refusal before an invalid operation, an authorized normal operation, readback and termination without repeated writes. Evaluate planning, correction and resumption against real requirements and results. For GitHub use, verify protection, checks, normal merge and main readback through the [supported route](hooks/README.md#github統合の対応経路). Keep version-specific evidence and unfinished acceptance in the destination's designated Linear Project.
-
-Hooks inspect supported operations, not arbitrary programs or every GUI/API path. They do not provide a universal security boundary, prove that a check tests the right business requirement, or undo a completed side effect. Missing adapters, untrusted Hooks and unverified execution paths must remain visible limitations.
+Hookは将来必要と判断した場合の補強に限り、現在の開発・完成・導入条件へ戻しません。
