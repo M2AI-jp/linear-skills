@@ -30,9 +30,11 @@ jobs:
               assert f'name: {name}\n' in frontmatter, root
               assert 'description:' in frontmatter, root
               assert (root / 'agents/openai.yaml').is_file(), root
-          for path in [Path('README.md'), *Path('skills').rglob('*.md')]:
+          for path in [Path('README.md'), *Path('skills').rglob('*.md'), *Path('hooks').rglob('*.md')]:
               for target in re.findall(r'\]\(([^)]+)\)', path.read_text()):
                   if '://' in target or target.startswith('#'):
                       continue
                   assert (path.parent / target.split('#')[0]).exists(), (path, target)
           PYCODE
+      - name: Test activation hooks
+        run: python -m unittest discover -s hooks -v

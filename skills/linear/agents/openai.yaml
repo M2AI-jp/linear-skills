@@ -3,4 +3,4 @@ interface:
   short_description: "対象と正本を引き継ぎ、計画の構築・整理から実行・訂正・再開へつなぐ"
   default_prompt: "$linear を使い、明示した対象または導入済み入口の対象・正本を引き継ぎ、計画の構築・整理はlinear-refresh、実行・訂正・再開はlinear-pmへ必要な順でつないでください。"
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
