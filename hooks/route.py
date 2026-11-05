@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Add bounded routing context. Never block, mutate, or call another service."""
+"""Advisory routing context for the linear-workflow skill.
+
+DISARMED. This handler returns nothing until someone sets DISARMED = False
+below and reinstalls deliberately. See hooks/README.md for why.
+
+History: an earlier version of this file fired whenever the word "linear"
+appeared in a prompt, or whenever any ancestor AGENTS.md mentioned "linear".
+That matched "linear algebra", "linear regression", and every unrelated repo
+whose AGENTS.md happened to reference Linear, so the package was uninstalled
+on 2026-10-14 for interfering with other work. The trigger below is rewritten
+to be opt-in per repository, and it still ships switched off.
+"""
 import argparse
 import json
 import os
@@ -8,8 +19,21 @@ import re
 import stat
 import sys
 
+# Set to False only when you intend this handler to inject context again, and
+# only after confirming the opt-in markers below are present where you want it.
+DISARMED = True
+
 LIMIT = 65536
-LINEAR = re.compile(r"(?<![A-Za-z])linear(?![A-Za-z])", re.I)
+
+# A repository opts in by writing this exact marker into its AGENTS.md or
+# CLAUDE.md. Nothing else arms the handler: neither the bare word "linear"
+# nor a passing mention of the skill's folder name.
+OPT_IN_MARKER = "linear-workflow: on"
+OPT_IN_FILES = ("AGENTS.md", "CLAUDE.md")
+
+# Only used to decide whether the current prompt is about Linear at all, and
+# only inside a repository that already opted in above.
+LINEAR_HINT = re.compile(r"linear\.app|(?<![0-9A-Za-z])[A-Z]{2,5}-[0-9]{1,6}(?![0-9A-Za-z])")
 
 
 def read_regular(path):
@@ -24,7 +48,28 @@ def read_regular(path):
     return data.decode("utf-8")
 
 
+def opted_in(cwd):
+    """True only when an ancestor of cwd carries the explicit opt-in marker."""
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return False
+    folder = Path(cwd).resolve(strict=True)
+    if not folder.is_dir():
+        return False
+    for parent in (folder, *folder.parents):
+        for name in OPT_IN_FILES:
+            candidate = parent / name
+            if candidate.exists() or candidate.is_symlink():
+                try:
+                    if OPT_IN_MARKER in read_regular(candidate):
+                        return True
+                except (OSError, ValueError, UnicodeDecodeError):
+                    continue
+    return False
+
+
 def context(payload, skills_root):
+    if DISARMED:
+        return None
     if not isinstance(payload, dict):
         return None
     event = payload.get("hook_event_name")
@@ -32,30 +77,24 @@ def context(payload, skills_root):
         return None
     if event == "SessionStart" and payload.get("source") not in ("resume", "compact"):
         return None
-    entry = Path(skills_root).expanduser().resolve(strict=True) / "linear" / "SKILL.md"
-    if not read_regular(entry).strip():
+    if not opted_in(payload.get("cwd")):
         return None
-    selected = event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str) and LINEAR.search(payload["prompt"])
-    if not selected:
-        cwd = payload.get("cwd")
-        if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+    # A missing or unreadable entry means there is nothing to point at. Stay
+    # silent rather than raising: a broken install must not disturb a session.
+    try:
+        entry = Path(skills_root).expanduser().resolve(strict=True) / "linear-workflow" / "SKILL.md"
+        if not read_regular(entry).strip():
             return None
-        folder = Path(cwd).resolve(strict=True)
-        if not folder.is_dir():
-            return None
-        for parent in (folder, *folder.parents):
-            agent_file = parent / "AGENTS.md"
-            if agent_file.exists() or agent_file.is_symlink():
-                if LINEAR.search(read_regular(agent_file)):
-                    selected = True
-                    break
-    if not selected:
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
+    if event == "UserPromptSubmit":
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or not LINEAR_HINT.search(prompt):
+            return None
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": (
-        "Linearに関係する依頼では、ユーザー・AGENTS・所有IssueのスキルOFFを優先し、"
-        "このHookだけでONへ変更しない。適用する担当は明示された有効版を優先し、"
-        f"指定がなければ入口 {entry} を読み、必要なRefresh/PMへ接続する。"
-        "読取だけの依頼は回答で完了し、適用外の仕事では使わない。"
+        f"このリポジトリはLinearで仕事を追跡している。入口は {entry}。"
+        "読取だけの依頼は読んで答えて終える。ユーザーの指示が優先で、"
+        "この案内だけでスキルを使う判断にしない。"
     )}}
 
 
