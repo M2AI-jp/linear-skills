@@ -13,11 +13,25 @@
 発火するのは、次のすべてが成立したときだけです。
 
 1. `DISARMED = False` にしてある
-2. 作業フォルダか、その祖先の `AGENTS.md` / `CLAUDE.md` に `linear-workflow: on` の行が書かれている（リポジトリ側の明示的なopt-in）。雛形は [templates/repo-AGENTS.md](../templates/repo-AGENTS.md) にある。スキル名やフォルダ名に触れるだけでは成立しない
-3. `UserPromptSubmit` では、プロンプトに `linear.app` またはIssue IDの形（`MAT-123`）が含まれる。`SessionStart` では `source` が `resume` か `compact`
+2. 作業フォルダから**リポジトリのルートまで**の範囲にある `AGENTS.md` または `CLAUDE.md` に、opt-in の**行**がある
+3. `UserPromptSubmit` では、プロンプトに `linear.app` か、そのリポジトリが宣言したチームキーのIssue ID が含まれる。`SessionStart` では `source` が `resume` か `compact`
 4. 指し示す `skills/linear-workflow/SKILL.md` が実在して空でない
 
-リポジトリが自分で名乗らない限り発火しません。入力装置はリポジトリごとに用意する、という元の考え方をそのまま条件にしています。読むのは `AGENTS.md` と `CLAUDE.md` という名前のファイルだけなので、`templates/repo-AGENTS.md` は意図的に別の名前にしてあります。このリポジトリ自身の `AGENTS.md` にもopt-inの行は入れていません。
+opt-in の行はこう書きます。雛形は [templates/repo-AGENTS.md](../templates/repo-AGENTS.md)。
+
+```
+linear-workflow: on
+linear-workflow: on (MAT)
+linear-workflow: on (MAT, ENG)
+```
+
+**行全体が一致しなければ成立しません。** 文章の中で触れたり、バックティックで囲んだ例を書いたり、箇条書きや引用の中に入れたりしても発火しません。opt-in の書き方を説明している文書が、それだけで opt-in になってしまうのを防ぐためです。
+
+括弧内はチームキー。宣言すると `MAT-123` のような Issue ID でも発火します。宣言しなければ `linear.app` を含むプロンプトだけです。`UTF-8`、`COVID-19`、`GPT-4`、`ISO-8601`、`SHA-256`、`RFC-2119` のような英大文字とハイフンと数字の並びで誤って発火しないのは、この宣言が必要だからです。
+
+探索は**リポジトリのルート（`.git` があるところ）で止まります。** ホームディレクトリに置いた opt-in が、その下の無関係なリポジトリまで巻き込むことはありません。`.git` が見つからない場合は、作業フォルダ自身の `AGENTS.md` / `CLAUDE.md` だけを見ます。
+
+`AGENTS.md` が**シンボリックリンクなら読みません。** リポジトリの外のファイルを指すリンクで opt-in させられるのを防ぎます。読む対象は `AGENTS.md` と `CLAUDE.md` という名前のファイルだけなので、雛形は意図的に `repo-AGENTS.md` にしてあります。このリポジトリ自身の `AGENTS.md` にも opt-in の行は入れていません。
 
 ## できること・できないこと
 
@@ -53,4 +67,6 @@ python3 install.py --remove
 python3 -m unittest discover -s hooks
 ```
 
-無効のまま何も返さないこと、有効にしたときopt-inが必須であること、`linear algebra` やスキル名の言及だけでは発火しないこと、`SessionStart` が resume/compact だけであること、installerが明示フラグなしでは何も書かないことを確認します。
+34件。無効のまま何も返さないこと、opt-in が行一致であること、探索がリポジトリのルートで止まること、シンボリックリンクを読まないこと、宣言のないチームキーで発火しないこと、`SessionStart` が resume/compact だけであること、プロセスとして実行したときに必ず終了コード0で `decision` を出さないこと、installer が外部のHookを保持して完全に元へ戻すことを確認します。
+
+試験が実環境に依存しないよう、各fixtureは `.git` を持つ使い捨てのリポジトリを作り、終了時に片付けます。

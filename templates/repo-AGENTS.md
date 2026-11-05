@@ -38,10 +38,16 @@ Claude Code では CLAUDE.md でも同じ。
 
 ## スキル
 
-linear-workflow: on
+linear-workflow: on (<チームキー>)
 
 <!--
-上の行は、同梱の起動案内 Hook に対する明示的な opt-in。Hook を使わないなら
-消してよい。消してもスキル自体は使える（Codex なら $linear-workflow、
-Claude Code なら依頼の内容から選ばれる）。
+上の行は、同梱の起動案内 Hook に対する明示的な opt-in。行全体が一致しないと
+成立しないので、文章の中や引用の中に書いても効かない。
+
+括弧内はこのリポジトリが使う Linear のチームキー（例: MAT）。複数ならカンマで
+区切る。宣言すると MAT-123 のような Issue ID でも案内が出る。括弧ごと省略すると
+linear.app を含む依頼だけになる。
+
+Hook を使わないなら、この行ごと消してよい。消してもスキル自体は使える
+（Codex なら $linear-workflow、Claude Code なら依頼の内容から選ばれる）。
 -->

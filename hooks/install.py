@@ -14,6 +14,13 @@ import tempfile
 OWNER = "linear-harness-router-v1"
 EVENTS = ("UserPromptSubmit", "SessionStart")
 
+# Built from route.py so the installed matcher cannot drift from the
+# sources the handler itself acts on.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import route  # noqa: E402
+
+SESSION_START_MATCHER = "^(" + "|".join(route.SESSION_START_SOURCES) + ")$"
+
 
 def safe_path(path):
     for part in (path, *path.parents):
@@ -110,7 +117,7 @@ def install(config, skills, remove=False, source=None):
         command = shlex.join([sys.executable, str(destination), "--skills-root", str(skills), "--owner", OWNER])
         handler = {"type": "command", "command": command, "timeout": 3}
         hooks.setdefault("UserPromptSubmit", []).append({"hooks": [handler]})
-        hooks.setdefault("SessionStart", []).append({"matcher": "^(resume|compact)$", "hooks": [copy.deepcopy(handler)]})
+        hooks.setdefault("SessionStart", []).append({"matcher": SESSION_START_MATCHER, "hooks": [copy.deepcopy(handler)]})
     if updated == data:
         if destination and not destination.exists():
             destination.parent.mkdir(parents=True, exist_ok=True)
