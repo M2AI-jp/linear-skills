@@ -26,8 +26,9 @@ DISARMED = True
 LIMIT = 65536
 
 # A repository opts in by writing this exact marker into its AGENTS.md or
-# CLAUDE.md. Nothing else arms the handler: the bare word "linear" does not.
-OPT_IN_MARKER = "linear-workflow"
+# CLAUDE.md. Nothing else arms the handler: neither the bare word "linear"
+# nor a passing mention of the skill's folder name.
+OPT_IN_MARKER = "linear-workflow: on"
 OPT_IN_FILES = ("AGENTS.md", "CLAUDE.md")
 
 # Only used to decide whether the current prompt is about Linear at all, and

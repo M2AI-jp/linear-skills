@@ -77,4 +77,12 @@ Milestoneは疎結合なモジュール単位にする。リポジトリもCodex
 
 **Hookは無効のまま同梱。** 起動条件をリポジトリ側の明示的なopt-inに書き換えた（`AGENTS.md` か `CLAUDE.md` に `linear-workflow` の文字列）。`route.py` の `DISARMED = True` と `install.py --enable-interception` で二重に止めてある。詳細は [hooks/README.md](hooks/README.md)。
 
+**AGENTS.mdを配布物に含めた。** 原文は、リポジトリ直下のAGENTS.mdで毎回参照すべき正本を明示すること、各フォルダに役割と原則を簡潔に書いたAGENTS.mdを置くことを求めている（2026-08-31 `01a057ff`）。前の版は3スキルそれぞれに5行のAGENTS.mdを持っていたが、導入先リポジトリの入口の雛形はなかった。スキルを置いても、次のセッションがどのProjectを見ればいいか分からない状態だった。
+
+今回は3つに分けた。`skills/linear-workflow/AGENTS.md` がフォルダの役割・境界・読む順番を持つ。`templates/repo-AGENTS.md` が導入先リポジトリに置く入口の雛形で、対象Project・毎回読む正本・許可範囲を埋める。このリポジトリのルート `AGENTS.md` は開発の入口で、責任フォルダの一覧を持つ。Git管理外だったのを管理下に入れた。`hooks/` には置かず、`hooks/README.md` が役割を持つ。同じことを二箇所に書かない。
+
+`references/plan.md` に、計画ができたら導入先リポジトリの入口を書く工程を足した。これが原文の「入力装置」にあたる部分で、前の版には工程として存在しなかった。
+
+**opt-inマーカーを誤検知しない形にした。** 当初 `linear-workflow` という文字列にしていたが、Hookは部分一致で判定するので、スキル名に触れた文書がすべてopt-inになる。前の版が `linear` の語で誤発火したのと同じ構造の欠陥なので、`linear-workflow: on` に変えた。Hookが読むのは `AGENTS.md` と `CLAUDE.md` という名前のファイルだけなので、雛形は `repo-AGENTS.md` という別の名前にしてある。このリポジトリのAGENTS.mdにその行が入っていないことをCIで検査している。
+
 **まだ作っていないもの。** E2Eの定義は `plan.md` の工程として書いたが、テストコードを別文脈のエージェントが定性レビューする循環は文章での指示にとどまる。実在の案件で一巡させて観測するまで、好循環が回ったとは言わない。

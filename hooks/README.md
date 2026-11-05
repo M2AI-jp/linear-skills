@@ -13,11 +13,11 @@
 発火するのは、次のすべてが成立したときだけです。
 
 1. `DISARMED = False` にしてある
-2. 作業フォルダか、その祖先の `AGENTS.md` / `CLAUDE.md` に、文字列 `linear-workflow` が書かれている（リポジトリ側の明示的なopt-in）
+2. 作業フォルダか、その祖先の `AGENTS.md` / `CLAUDE.md` に `linear-workflow: on` の行が書かれている（リポジトリ側の明示的なopt-in）。雛形は [templates/repo-AGENTS.md](../templates/repo-AGENTS.md) にある。スキル名やフォルダ名に触れるだけでは成立しない
 3. `UserPromptSubmit` では、プロンプトに `linear.app` またはIssue IDの形（`MAT-123`）が含まれる。`SessionStart` では `source` が `resume` か `compact`
 4. 指し示す `skills/linear-workflow/SKILL.md` が実在して空でない
 
-リポジトリが自分で名乗らない限り発火しません。入力装置はリポジトリごとに用意する、という元の考え方をそのまま条件にしています。
+リポジトリが自分で名乗らない限り発火しません。入力装置はリポジトリごとに用意する、という元の考え方をそのまま条件にしています。読むのは `AGENTS.md` と `CLAUDE.md` という名前のファイルだけなので、`templates/repo-AGENTS.md` は意図的に別の名前にしてあります。このリポジトリ自身の `AGENTS.md` にもopt-inの行は入れていません。
 
 ## できること・できないこと
 
@@ -53,4 +53,4 @@ python3 install.py --remove
 python3 -m unittest discover -s hooks
 ```
 
-無効のまま何も返さないこと、有効にしたときopt-inが必須であること、`linear algebra` で発火しないこと、`SessionStart` が resume/compact だけであること、installerが明示フラグなしでは何も書かないことを確認します。
+無効のまま何も返さないこと、有効にしたときopt-inが必須であること、`linear algebra` やスキル名の言及だけでは発火しないこと、`SessionStart` が resume/compact だけであること、installerが明示フラグなしでは何も書かないことを確認します。

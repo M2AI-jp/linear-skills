@@ -19,9 +19,12 @@ def workspace(marker=True, skill=True):
     (repo / "nested").mkdir(parents=True)
     if marker:
         (repo / "AGENTS.md").write_text(
-            "Linearで仕事を追跡している。入口は linear-workflow。\n", encoding="utf-8")
+            "# このリポジトリ\n\nlinear-workflow: on\n", encoding="utf-8")
     else:
-        (repo / "AGENTS.md").write_text("linear algebra notes\n", encoding="utf-8")
+        # Mentions the word and the folder name, but never opts in.
+        (repo / "AGENTS.md").write_text(
+            "linear algebra notes. skills/linear-workflow/ is documented here.\n",
+            encoding="utf-8")
     skills = root / "skills"
     if skill:
         entry = skills / "linear-workflow"
@@ -52,6 +55,12 @@ class Armed(unittest.TestCase):
         cwd, skills = workspace(marker=False)
         payload = prompt_payload(cwd, "MAT-123 を進めて")
         self.assertIsNone(route.context(payload, skills))
+
+    def test_naming_the_skill_without_the_marker_does_not_opt_in(self):
+        cwd, skills = workspace(marker=False)
+        (cwd.parent / "AGENTS.md").write_text(
+            "導入手順は skills/linear-workflow/SKILL.md を見る。\n", encoding="utf-8")
+        self.assertIsNone(route.context(prompt_payload(cwd, "MAT-123"), skills))
 
     def test_opt_in_marker_is_inherited_from_an_ancestor(self):
         cwd, skills = workspace()
