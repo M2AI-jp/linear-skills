@@ -17,47 +17,25 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Check packaged files and local links
+      - name: Check the package and its links
         run: |
           python - <<'PYCODE'
           from pathlib import Path
           import re
 
-          root = Path('skills/linear-workflow')
-          text = (root / 'SKILL.md').read_text()
-          assert text.startswith('---\n'), root
+          # One file is the whole skill. Keep it that way.
+          entry = Path('skills/linear-workflow/SKILL.md')
+          text = entry.read_text()
+          assert text.startswith('---\n'), entry
           frontmatter = text.split('---', 2)[1]
-          assert 'name: linear-workflow\n' in frontmatter, root
-          assert 'description:' in frontmatter, root
+          assert 'name: linear-workflow\n' in frontmatter, entry
+          assert 'description:' in frontmatter, entry
+          assert [p for p in Path('skills').rglob('*') if p.is_file()] == [entry], \
+              'the skill is one file; add nothing beside it without saying why in DESIGN.md'
 
-          # Everything the skill folder must carry to be installable on its own.
-          for required in ('AGENTS.md', 'agents/openai.yaml',
-                           'references/plan.md', 'references/execute.md'):
-              assert (root / required).is_file(), required
-
-          # The installer needs an entry template for the target repository.
-          assert Path('templates/repo-AGENTS.md').is_file()
-
-          # The package must ship switched off: nothing may activate on install.
-          assert 'allow_implicit_invocation: false' in (root / 'agents/openai.yaml').read_text()
-          assert 'DISARMED = True' in Path('hooks/route.py').read_text()
-
-          # This repository must not opt itself in to its own advisory hook.
-          # The hook matches by substring, so even quoting the marker here
-          # would opt in. Files the hook reads are named exactly AGENTS.md or
-          # CLAUDE.md; the template is deliberately named repo-AGENTS.md.
-          marker = 'linear-workflow' + ': on'
-          for entry in Path('.').rglob('*'):
-              if entry.name in ('AGENTS.md', 'CLAUDE.md') and entry.is_file():
-                  assert marker not in entry.read_text(), entry
-
-          for path in [Path('README.md'), Path('AGENTS.md'), Path('DESIGN.md'),
-                       *Path('skills').rglob('*.md'), *Path('hooks').rglob('*.md'),
-                       *Path('templates').rglob('*.md')]:
+          for path in [Path('README.md'), Path('AGENTS.md'), Path('DESIGN.md'), entry]:
               for target in re.findall(r'\]\(([^)]+)\)', path.read_text()):
                   if '://' in target or target.startswith('#'):
                       continue
                   assert (path.parent / target.split('#')[0]).exists(), (path, target)
           PYCODE
-      - name: Test activation hooks
-        run: python -m unittest discover -s hooks -v
