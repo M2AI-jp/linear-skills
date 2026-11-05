@@ -30,6 +30,8 @@ jobs:
           frontmatter = text.split('---', 2)[1]
           assert 'name: linear-workflow\n' in frontmatter, entry
           assert 'description:' in frontmatter, entry
+          # Misfiring on the bare word "linear" is what got the previous version removed.
+          assert '線形' in frontmatter, 'the description must keep excluding linearの別の意味'
           assert [p for p in Path('skills').rglob('*') if p.is_file()] == [entry], \
               'the skill is one file; add nothing beside it without saying why in DESIGN.md'
 
