@@ -1,50 +1,56 @@
-# Linear の入口を案内する Hook
+# 起動の案内（現在は無効）
 
-本体の受入・導入後に追加する、Python 3 標準ライブラリだけの起動補助です。`route.py` は会話ログ、Linear API、状態キャッシュを使いません。入力か作業フォルダの `AGENTS.md` に Linear の文脈があれば、スキルの入口と適用条件を短く追加します。実際のスキル使用はモデルの実行記録で確認します。
+このフォルダのコードは**無効化した状態で入っています**。`route.py` の `DISARMED = True` を解除し、`install.py --enable-interception` を明示的に実行するまで、何も起きません。スキル本体はこれを使わずに動きます。
 
-| イベント | 案内する条件 |
-|---|---|
-| `UserPromptSubmit` | 入力に Linear / linear.app がある、または作業フォルダから親へたどった AGENTS.md に Linear の参照がある |
-| `SessionStart` | source が resume / compact で、同じフォルダ条件が成立する |
+## なぜ無効なのか
 
-ユーザー・AGENTS・所有 Issue の OFF と指定された有効版を優先します。ON への切替、業務更新、ツール拒否、入力書換え、Stop 継続、LLM/MCP 呼出し、外部通信は行いません。読取だけなら回答で終了し、適用外ならスキルを使わないよう案内します。
+前の版は、プロンプトに `linear` という語が含まれるか、作業フォルダから親へたどった `AGENTS.md` に `linear` が含まれるだけで発火しました。線形代数でも線形回帰でも、Linearに触れる `AGENTS.md` を持つ無関係なリポジトリの作業でも案内が差し込まれます。2026-10-14、他の開発への干渉を理由にパッケージごと撤去されました。
 
-入力と各読取ファイルは最大 64 KiB。欠損・破損・過大入力・異常パス・symlinkループ・範囲外イベントは空出力、終了コード 0 です。出力は公式の `hookSpecificOutput.additionalContext` のみ。Hook 定義の timeout は 3 秒です。Python 自体が起動できない等の環境障害は Codex 側で扱われるため、正常動作を保証するものではありません。
+必要だったのは「使う場面で、名前を言われなくても選ばれること」です。できていたのは「要るかどうかに関わらず差し込まれること」でした。別の問題です。
 
-## 導入
+## 書き換えた起動条件
 
-3 スキルを先に配置してから、このフォルダで実行します。
+発火するのは、次のすべてが成立したときだけです。
+
+1. `DISARMED = False` にしてある
+2. 作業フォルダか、その祖先の `AGENTS.md` / `CLAUDE.md` に、文字列 `linear-workflow` が書かれている（リポジトリ側の明示的なopt-in）
+3. `UserPromptSubmit` では、プロンプトに `linear.app` またはIssue IDの形（`MAT-123`）が含まれる。`SessionStart` では `source` が `resume` か `compact`
+4. 指し示す `skills/linear-workflow/SKILL.md` が実在して空でない
+
+リポジトリが自分で名乗らない限り発火しません。入力装置はリポジトリごとに用意する、という元の考え方をそのまま条件にしています。
+
+## できること・できないこと
+
+できるのは、入口のパスを1行案内することだけです。Linearを更新せず、ツールや終了を拒否せず、入力を書き換えず、LLMやMCPを呼ばず、外部通信をしません。失敗・設定なし・入力不足のときは空出力で終了コード0です。Python 3の標準ライブラリだけを使います。
+
+案内が出たことは、スキルが使われたことの証明ではありません。実際に使ったかどうかは実行記録で確かめます。
+
+## 有効にする場合
 
 ```sh
-python3 install.py
+python3 -c "import pathlib,re; p=pathlib.Path('route.py'); p.write_text(p.read_text().replace('DISARMED = True','DISARMED = False'))"
 ```
-
-既定では `~/.codex/skills/linear/SKILL.md` を確認し、`~/.codex/linear-harness/<SHA256>/route.py` に配置します。生成コマンドは実行に使った Python のパスを使用します。別の配置は明示できます。
 
 ```sh
-python3 install.py --config-dir /path/to/codex-config --skills-root /path/to/skills
+python3 install.py --enable-interception
 ```
 
-installer は既存 Hook を保持し、自己所有の 2 イベントの handler だけ置換します。元の `hooks.json` を `hooks.json.backup-<SHA256>` に保持し、検証後に一時ファイルから設定を置換します。破損設定・未知の構造・書込先ファイルの symlink は説明付きで失敗し、現在の設定を書き換えません。基準ディレクトリと読取用の通常 symlink は正規化して扱います。同じ設定なら保存せず、配置済みコードの欠損だけ復元します。旧版コード・バックアップは保持します。
+導入先を変えるなら `--config-dir` と `--skills-root` を渡します。installerは既存Hookを保持し、自分が所有する2イベントのhandlerだけを置換します。元の `hooks.json` はバックアップへ退避します。
 
-**導入だけでは Hook は信頼されません。Codex の正規 `/hooks` 画面で生成された定義とコードを確認し、信頼を設定してください。** 定義の更新時も再確認が必要です。installer は trust、config.toml、requirements.toml、features を変更しません。プロジェクト等で Hook が無効なら、その設定が優先されます。
+**導入だけではHookは信頼されません。** Codexの `/hooks` 画面で生成された定義とコードを確認し、信頼を設定してください。定義を更新したら再確認が必要です。installerは trust、config.toml、features を変更しません。
 
-参照: [Codex Hooks の公式仕様](https://learn.chatgpt.com/docs/hooks)。非管理 Hook の信頼確認、複数設定の合成、追加 context 形式はこの仕様に従います。
-
-## 取り外し・復帰
+## 戻す
 
 ```sh
 python3 install.py --remove
 ```
 
-独自配置なら同じ `--config-dir` を渡します。他の Hook を残し自己所有 handler だけ取り除きます。スキルと旧版コードは削除しません。過去版へ戻す場合はその版の installer を実行し、定義を `/hooks` で再確認します。バックアップ全体の復元は他の変更も戻すため自動では行いません。
+削除に `--enable-interception` は不要です。他のHookは残し、自分が所有するhandlerだけ取り除きます。
 
 ## 試験
 
-配布ルートから:
-
 ```sh
-python3 -m unittest discover -s hooks -v
+python3 -m unittest discover -s hooks
 ```
 
-単体試験は文脈選択、読取の異常、非ブロック出力形式、既存 Hook 保持、冪等導入・更新・除去を確認します。Codex の実イベントでの起動・スキル使用の証拠とは別です。実経路では通常依頼、読取だけ、OFF、適用外、再開、入口欠損と復帰を確認してください。
+無効のまま何も返さないこと、有効にしたときopt-inが必須であること、`linear algebra` で発火しないこと、`SessionStart` が resume/compact だけであること、installerが明示フラグなしでは何も書かないことを確認します。

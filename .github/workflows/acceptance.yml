@@ -22,15 +22,22 @@ jobs:
           python - <<'PYCODE'
           from pathlib import Path
           import re
-          for name in ('linear', 'linear-refresh', 'linear-pm'):
-              root = Path('skills') / name
-              text = (root / 'SKILL.md').read_text()
-              assert text.startswith('---\n'), root
-              frontmatter = text.split('---', 2)[1]
-              assert f'name: {name}\n' in frontmatter, root
-              assert 'description:' in frontmatter, root
-              assert (root / 'agents/openai.yaml').is_file(), root
-          for path in [Path('README.md'), *Path('skills').rglob('*.md'), *Path('hooks').rglob('*.md')]:
+
+          root = Path('skills/linear-workflow')
+          text = (root / 'SKILL.md').read_text()
+          assert text.startswith('---\n'), root
+          frontmatter = text.split('---', 2)[1]
+          assert 'name: linear-workflow\n' in frontmatter, root
+          assert 'description:' in frontmatter, root
+          for required in ('agents/openai.yaml', 'references/plan.md', 'references/execute.md'):
+              assert (root / required).is_file(), required
+
+          # The package must ship switched off: nothing may activate on install.
+          assert 'allow_implicit_invocation: false' in (root / 'agents/openai.yaml').read_text()
+          assert 'DISARMED = True' in Path('hooks/route.py').read_text()
+
+          for path in [Path('README.md'), Path('AGENTS.md'), Path('DESIGN.md'),
+                       *Path('skills').rglob('*.md'), *Path('hooks').rglob('*.md')]:
               for target in re.findall(r'\]\(([^)]+)\)', path.read_text()):
                   if '://' in target or target.startswith('#'):
                       continue

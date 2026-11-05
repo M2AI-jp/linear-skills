@@ -95,7 +95,7 @@ def install(config, skills, remove=False, source=None):
     script_bytes = None
     destination = None
     if not remove:
-        entry = skills / "linear" / "SKILL.md"
+        entry = skills / "linear-workflow" / "SKILL.md"
         entry = entry.resolve(strict=True)
         if not entry.is_file() or not entry.read_bytes().strip():
             raise ValueError(f"Missing skill entry: {entry}")
@@ -142,7 +142,15 @@ def main():
     parser.add_argument("--config-dir", default="~/.codex")
     parser.add_argument("--skills-root", default="~/.codex/skills")
     parser.add_argument("--remove", action="store_true")
+    # Installing this handler changes what every session in every opted-in
+    # repository receives. It is not a default step, so it needs saying twice.
+    parser.add_argument("--enable-interception", action="store_true",
+                        help="required to install; removal never needs it")
     args = parser.parse_args()
+    if not args.remove and not args.enable_interception:
+        parser.exit(1, "Not installed: pass --enable-interception to install this "
+                       "handler, and set DISARMED = False in route.py. The skill "
+                       "works without it.\n")
     try:
         print(install(args.config_dir, args.skills_root, args.remove))
     except (OSError, ValueError, TypeError) as exc:
