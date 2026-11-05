@@ -1,6 +1,6 @@
 ---
 name: linear-workflow
-description: linear.app のProjectやIssueで追跡している仕事を進めるときに使う。MAT-123のようなIssue IDやlinear.appのURLが出たとき、Linearで管理しているリポジトリの実装・修正・PR・リリース、中断した仕事の再開や進捗確認のとき、スキル名を言われなくても使う。GitHubと組み合わせて、コードもコード以外（調査、資料、設定、外部サービスの操作、人への連絡）も扱う。線形代数・線形回帰など、linearという語の別の意味には使わない。読むだけの質問には読んで答えるだけにする。
+description: linear.app のProjectやIssueで追跡している仕事を進めるときに使う。ABC-123のような英字＋連番のIssue IDやlinear.appのURLが出たとき、Linearで管理しているリポジトリの実装・修正・PR・リリース、中断した仕事の再開や進捗確認のとき、スキル名を言われなくても使う。GitHubと組み合わせて、コードもコード以外（調査、資料、設定、外部サービスの操作、人への連絡）も扱う。線形代数・線形回帰など、linearという語の別の意味には使わない。読むだけの質問には読んで答えるだけにする。
 ---
 
 # Linear Workflow
