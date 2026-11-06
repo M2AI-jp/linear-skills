@@ -31,7 +31,7 @@ Linearで追跡している仕事を、計画から実行・確認・引継ぎ�
 
 確かめていないこと。
 
-- **Issue層の状態遷移**（Todo→In Progress→In Review→Done）。このワークスペースは無料プランのアクティブIssue上限（`USAGE_LIMIT_EXCEEDED` / `activeIssueCount`、467件）に達していて、誰もIssueを作れない。既存Issueのアーカイブか課金で解ける
+- **Issue層の書き込み経路**（Todo→In Progress→In Review→Done の遷移をLinearへ反映すること）。この層の判断は対照つきで測ってあり、Projectの完了判断は対照と完全に逆転した。ワークスペースが無料プランのアクティブIssue上限（`USAGE_LIMIT_EXCEEDED` / `activeIssueCount`、467件）に達していて、誰もIssueを作れない
 - 既知の弱いところ: 「完成させて」と言われたセッションは `AGENTS.md` を書かない（3本中3本）。導入手順2で人が先に書いていれば問題にならない。本文に書き足す形では直らなかったので、規則を増やさずに弱点として置いてある
 
 前の版（3スキル＋182行の共通契約＋Hook）は2026-09-23に配布され、2026-10-14に他の開発への干渉を理由に撤去された。経緯は [DESIGN.md](DESIGN.md)。
