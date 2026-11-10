@@ -311,6 +311,7 @@ class HarnessTest(unittest.TestCase):
         w.commit("新しい受入（赤）を足す")
         rc, out = w.run("gate", base)
         self.assertEqual(rc, 0, out)
+        self.assertIn("この版の受入  緑 1 ／ 赤 3（DEMO-2、DEMO-3、DEMO-9）", out)   # 赤いまま入るものも、見えるようにする
         w.accept("DEMO-1", False)
         w.commit("壊す")
         rc, out = w.run("gate", base)

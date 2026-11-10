@@ -683,6 +683,8 @@ def cmd_gate(repo, base):
         print(f"{k} {before[k]['text']} … 緑だった受入が" + ("赤になった" if k in now else "消えた"))
     if after.get("error"):
         print("受入を走らせられなかった: " + after["error"])
+    red = sorted(k for k, r in now.items() if not r["ok"])
+    print(f"この版の受入  緑 {len(now) - len(red)} ／ 赤 {len(red)}" + ("（" + "、".join(red) + "）" if red else ""))
     if broken:
         return 1
     print(f"緑だった受入 {sum(r['ok'] for r in before.values())} 本は緑のまま")
