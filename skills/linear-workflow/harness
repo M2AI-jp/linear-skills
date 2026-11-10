@@ -41,7 +41,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 
@@ -107,33 +106,49 @@ class Repo:
         self.root = root
         common = git("rev-parse", "--git-common-dir", cwd=root)[1]
         self.inside = os.path.join(os.path.normpath(os.path.join(root, common)), "harness")
-        self.outside = os.path.join(tempfile.gettempdir(), "harness-" + hashlib.sha256(
-            os.path.realpath(root).encode()).hexdigest()[:16])
-        self._store = None
+        # .git の外の置き場。HARNESS_STORE があればそこだけ。無ければ TMPDIR、/tmp の順。
+        # 作業フォルダには置かない（Python の一時フォルダの決め方は、ほかに書けないと作業フォルダに落ちる）。
+        name = "harness-" + hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16]
+        named = os.environ.get("HARNESS_STORE")
+        bases = [named] if named else list(dict.fromkeys(b for b in (os.environ.get("TMPDIR"), "/tmp") if b))
+        self.outside = [os.path.join(b, name) for b in bases
+                        if not (os.path.realpath(b) + os.sep).startswith(os.path.realpath(root) + os.sep)]
+        self._store = False
         self.main = self._main()
         self.sha = self.rev(self.main) if self.main else ""
         self.head = self.rev("HEAD")
 
     @property
     def store(self):
-        """置き場。.git の中に書けるならそこ。書けない場所（Codex のサンドボックス）では、一時フォルダ。"""
-        if self._store is None:
-            try:
-                os.makedirs(self.inside, exist_ok=True)
-                probe = os.path.join(self.inside, f".probe-{os.getpid()}")
-                with open(probe, "w"):
-                    pass
-                os.remove(probe)
-                self._store = self.inside
-            except OSError:
-                os.makedirs(self.outside, exist_ok=True)
-                self._store = self.outside
+        """書ける置き場。.git の中に書けるならそこ。書けない場所（Codex のサンドボックス）では .git の外。どこにも書けなければ None。"""
+        if self._store is False:
+            self._store = None
+            for home in self.places():
+                try:
+                    os.makedirs(home, exist_ok=True)
+                    probe = os.path.join(home, f".probe-{os.getpid()}")
+                    with open(probe, "w"):
+                        pass
+                    os.remove(probe)
+                    self._store = home
+                    tree = os.path.join(home, "tree")
+                    if os.path.isfile(os.path.join(tree, ".git")):      # 前の版が置いた git worktree。登録ごと片づける
+                        self.git("worktree", "remove", "--force", tree)
+                        shutil.rmtree(tree, ignore_errors=True)
+                        self.git("worktree", "prune")
+                    break
+                except OSError:
+                    continue
         return self._store
 
+    def places(self):
+        """置き場になりうる場所。書けなくても、読むことはできる。"""
+        return [self.inside] + self.outside
+
     def sessions(self):
-        """フックのあるセッションが残した記録。どちらの置き場にあっても読む。"""
+        """フックのあるセッションが残した記録。どの置き場にあっても読む。"""
         found = []
-        for home in (self.inside, self.outside):
+        for home in self.places():
             folder = os.path.join(home, "session")
             for name in (os.listdir(folder) if os.path.isdir(folder) else []):
                 state = load(os.path.join(folder, name))
@@ -250,10 +265,19 @@ def parse_lines(out):
 
 def accept_at(repo, sha, fresh=False):
     """sha の版で受入コマンドを走らせる。CIと同じく、追跡されているファイルだけがある場所で走る。"""
+    def left():
+        """この版の結果が、どこかの置き場に残っていれば、それ。外で動くフックが残したものを、中からも使う。"""
+        for home in repo.places():
+            hit = load(os.path.join(home, "accept", sha + ".json"))
+            if isinstance(hit, dict) and hit.get("results"):
+                return hit
+        return None
+
+    if not fresh and left():
+        return left()
+    if not repo.store:
+        return left() or {"error": "受入を走らせる場所が無い（.git にも、その外にも書けない）"}
     cache = os.path.join(repo.store, "accept", sha + ".json")
-    if not fresh and os.path.exists(cache):
-        with open(cache, encoding="utf-8") as f:
-            return json.load(f)
     entry = None
     for name in ("AGENTS.md", "CLAUDE.md"):
         rc, text = repo.git("show", f"{sha}:{name}")
@@ -262,10 +286,6 @@ def accept_at(repo, sha, fresh=False):
     if not cmd:
         return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い"}
     tree = os.path.join(repo.store, "tree")
-    if os.path.isfile(os.path.join(tree, ".git")):          # 前の版が置いた git worktree。登録ごと片づける
-        repo.git("worktree", "remove", "--force", tree)
-        shutil.rmtree(tree, ignore_errors=True)
-        repo.git("worktree", "prune")
     rc = 0
     if not os.path.isdir(os.path.join(tree, ".git")):
         shutil.rmtree(tree, ignore_errors=True)
@@ -512,7 +532,7 @@ def hook_input(argv):
 
 def session_file(repo, hook):
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(hook.get("session_id") or ""))
-    return os.path.join(repo.store, "session", sid + ".json") if sid else None
+    return os.path.join(repo.store, "session", sid + ".json") if sid and repo.store else None
 
 
 def load(path):
@@ -601,6 +621,8 @@ def cmd_check(repo, entry, hook):
             print("Linearに届かない: " + d["linear"])
         return 0
     path = session_file(repo, hook)
+    if as_hook and not path:
+        return 0                                            # 開始時の状態を覚えておく場所が無い。何が新しいか分からないので、止めない
     state = (load(path) if path else None)
     if path and state is None:
         save(path, baseline(repo, d))

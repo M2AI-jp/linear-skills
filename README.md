@@ -73,7 +73,7 @@ Codexは、人がそのリポジトリを信頼し、フックを確認するま
 
 - セッション開始時にモデルへ渡る入力に、現在地・スキルの一覧（`.agents/skills/` から）・入口が入る
 - commit されていないファイルを残して終わろうとすると Stop が止め、片づければ通り、片づけなければ3回目で通る
-- Codexのサンドボックスの中（`.git` に書けない）でも、`harness` は動く。エージェントが手で走らせる `harness check --wellformed` もここで動く
+- Codexのサンドボックスの中（`.git` に書けない）でも、`harness` は動く。エージェントが手で走らせる `harness check --wellformed` もここで動く。`/tmp` と `TMPDIR` まで書けなくする設定でも、フックが残した結果を読んで現在地を出し、作業ツリーには何も作らない
 - `harness setup` が書いた `.codex/hooks.json` を、Codexは Project のフックとして認識する（`codex app-server` の `hooks/list`）
 
 Codexの実物のモデルでの「建てる」と「1文で完成まで」は走らせていない。このマシンのCodexはログインしていない（`codex login status` が `Not logged in`）。
