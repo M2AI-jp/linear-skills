@@ -1,0 +1,17 @@
+name: accept
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: skills/linear-workflow/harness gate "${{ github.event.pull_request.base.sha || github.event.before }}"

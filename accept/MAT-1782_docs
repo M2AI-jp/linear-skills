@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+# REDESIGN.md は DESIGN.md に置き換わって無く、README は2ファイルの導入を harness setup まで説明し、「1ファイル」という記述が残っていない
+from pathlib import Path
+
+assert not Path("REDESIGN.md").exists(), "REDESIGN.md が残っている。実装した設計は DESIGN.md に置く"
+readme = Path("README.md").read_text(encoding="utf-8")
+agents = Path("AGENTS.md").read_text(encoding="utf-8")
+design = Path("DESIGN.md").read_text(encoding="utf-8")
+for needle in ("harness setup", ".claude/skills/linear-workflow", ".agents/skills/linear-workflow"):
+    assert needle in readme, f"README に {needle} の説明が無い"
+for name, text in (("README.md", readme), ("AGENTS.md", agents)):
+    assert "1ファイル" not in text, f"{name} に「1ファイル」が残っている"
+assert "## 完成条件" in design and "未実装" not in design.split("## 完成条件")[0][:400], "DESIGN.md が実装後の設計になっていない"
