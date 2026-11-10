@@ -85,16 +85,17 @@ class World:
                        "project": {"id": "p1", "name": "デモ", "status": {"type": status, "name": status},
                                    "projectMilestones": {"nodes": [{"name": "予約"}]}}}, f, ensure_ascii=False)
 
-    def run(self, *args, hook=None, cwd=None):
+    def run(self, *args, hook=None, cwd=None, env=None):
         # フックは --hook を付けて、標準入力にJSONを渡す。手で走らせるときは標準入力を閉じない（読まれないこと）
+        env = {**ENV, **(env or {})}
         if hook:
             p = subprocess.run([HARNESS, *args, "--hook"], cwd=cwd or self.repo, capture_output=True, text=True,
-                               env=ENV, input=json.dumps(hook))
+                               env=env, input=json.dumps(hook))
         else:
             reader, writer = os.pipe()
             try:
                 p = subprocess.run([HARNESS, *args], cwd=cwd or self.repo, capture_output=True, text=True,
-                                   env=ENV, stdin=reader, timeout=120)
+                                   env=env, stdin=reader, timeout=120)
             finally:
                 os.close(reader)
                 os.close(writer)
