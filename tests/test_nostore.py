@@ -110,6 +110,16 @@ class NoStoreTest(unittest.TestCase):
         self.assertTrue(os.listdir(self.dead))                # 指した場所に置いた
         self.assertEqual(self.w.git("status", "--porcelain", "--ignored"), "")
 
+    def test_a_result_left_for_an_older_main_is_not_presented_as_the_present(self):
+        self.assertIn(COUNTS, self.w.run("status")[1])        # フックが、いまの main の結果を残した
+        self.w.write("app/more.txt", "main が進んだ\n")
+        self.w.commit("main を進める")
+        self.lock()
+        rc, out = self.w.run("status", env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertIn("受入  走らせられなかった", out)       # 前の版の結果を、いまの現在地として出さない
+        self.assertNotIn(COUNTS, out)
+
     def lock_git_only(self):
         chmod_tree(self.git, False)
         self.addCleanup(chmod_tree, self.git, True)
