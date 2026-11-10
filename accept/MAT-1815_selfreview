@@ -1,0 +1,4 @@
+#!/bin/sh
+# 受入を書いたセッションがその見直しを閉じると停止の門が止め、開き直せば通す。前からある受入を別のセッションが見直して閉じるのは通す。建てたセッションが自分で閉じていれば、古い記録があっても、建て終わりの判定が通らない
+python3 -m unittest -q tests.test_selfreview || exit 1
+grep -qF "建てたセッションは、見直しを開いたまま終える" skills/linear-workflow/SKILL.md || { echo "SKILL.md に「建てたセッションは、見直しを開いたまま終える」が無い"; exit 1; }

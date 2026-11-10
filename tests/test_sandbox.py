@@ -1,0 +1,119 @@
+"""MAT-1814: Codexのサンドボックスの中でも、harness が落ちずに動く。
+
+Codex の workspace-write は、作業フォルダには書けるが .git の中には（すでにあるファイルにも）書けない。
+エージェントが手で走らせる harness は、その中で動く。フックのほうは外で動くので、
+先にフックが .git/harness を作っていて、あとから中で手で走らせる、という順番も起きる。
+"""
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+import tests.test_harness as base
+
+COUNTS = "受入  緑 1 ／ 赤 0 ／ 未実装 2"
+
+
+def chmod_tree(top, writable):
+    for folder, _, files in os.walk(top):
+        for name in [folder] + [os.path.join(folder, f) for f in files]:
+            if not os.path.islink(name):
+                mode = os.stat(name).st_mode
+                os.chmod(name, mode | 0o200 if writable else mode & ~0o222)
+
+
+class SandboxTest(unittest.TestCase):
+    def setUp(self):
+        self.w = base.World()
+        self.addCleanup(self.w.close)
+        base.HarnessTest.standard(self)
+        self.git = os.path.join(self.w.repo, ".git")
+
+    def lock(self):
+        """.git の中を、すでにあるものも含めて、書けなくする。"""
+        chmod_tree(self.git, False)
+        self.addCleanup(chmod_tree, self.git, True)
+        with self.assertRaises(OSError):                      # 書けるなら、この試験は何も確かめていない
+            open(os.path.join(self.git, "probe"), "w").close()
+
+    def files(self):
+        """作業ツリーにあるもの全部（無視されているものも含む）と、.git の中身の一覧。"""
+        seen = set()
+        for folder, _, names in os.walk(self.w.repo):
+            seen.update(os.path.relpath(os.path.join(folder, n), self.w.repo) for n in names)
+        return seen
+
+    def run_all(self, session):
+        start = {"hook_event_name": "SessionStart", "session_id": session}
+        stop = {"hook_event_name": "Stop", "session_id": session}
+        rc, out = self.w.run("status")
+        self.assertEqual(rc, 0)
+        self.assertIn(COUNTS, out)
+        self.assertIn("食い違い  なし", out)
+        self.w.run("status", hook=start)
+        self.assertEqual(self.w.run("check", hook=stop), (0, ""))
+        self.w.write("app/new.txt", "commit していない\n")
+        verdict = json.loads(self.w.run("check", hook=stop)[1])
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("commit されていない変更が 1 件ある（app/new.txt）", verdict["reason"])
+        os.remove(os.path.join(self.w.repo, "app/new.txt"))
+
+    def test_everything_works_and_nothing_is_written_when_git_dir_is_locked(self):
+        self.lock()
+        before = self.files()
+        self.run_all("sb1")
+        self.assertEqual(self.files(), before)                # .git にも作業ツリーにも、何も足していない
+
+    def test_it_also_works_after_a_hook_has_already_made_its_place_in_git(self):
+        self.run_all("sb0")                                   # 外で動くフックが、先に .git/harness を作った
+        self.assertTrue(os.path.isdir(os.path.join(self.git, "harness")))
+        self.lock()
+        before = self.files()
+        self.run_all("sb2")
+        self.assertEqual(self.files(), before)
+
+    def test_build_check_passes_when_git_dir_is_locked(self):
+        self.w.run("setup")
+        self.w.commit("フックを登録する")
+        self.lock()
+        before = self.files()
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("整っている", out)
+        self.assertEqual(self.files(), before)
+
+    def test_place_left_by_the_older_version_is_replaced_when_writable_and_left_alone_when_locked(self):
+        self.w.git("worktree", "add", "-q", "--detach", ".git/harness/tree", "HEAD")     # 前の版は git worktree を置いていた
+        self.assertEqual(len(self.w.git("worktree", "list").splitlines()), 2)
+        chmod_tree(self.git, False)
+        try:
+            before = self.files()
+            self.run_all("sb3")
+            self.assertEqual(self.files(), before)
+            self.assertEqual(len(self.w.git("worktree", "list").splitlines()), 2)        # 書けないときは、触らない
+        finally:
+            chmod_tree(self.git, True)
+        self.run_all("sb4")
+        self.assertEqual(len(self.w.git("worktree", "list").splitlines()), 1)            # 書けるときは、登録ごと片づける
+
+    @unittest.skipUnless(shutil.which("codex"), "codex が無い環境では飛ばす")
+    def test_inside_the_real_codex_sandbox(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        before = self.files()
+        for args in (["status"], ["check"]):
+            p = subprocess.run(["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", base.HARNESS, *args],
+                               cwd=os.path.realpath(self.w.repo), capture_output=True, text=True, timeout=180,
+                               stdin=subprocess.DEVNULL, env={**base.ENV, "CODEX_HOME": home})
+            self.assertEqual(p.returncode, 0, p.stderr[-600:])
+        self.assertEqual(self.files(), before)
+        p = subprocess.run(["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", base.HARNESS, "status"],
+                           cwd=os.path.realpath(self.w.repo), capture_output=True, text=True, timeout=180,
+                           stdin=subprocess.DEVNULL, env={**base.ENV, "CODEX_HOME": home})
+        self.assertIn(COUNTS, p.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()
