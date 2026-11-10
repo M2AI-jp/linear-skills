@@ -95,6 +95,16 @@ class SelfReviewTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn(BUILT, out)
 
+    def test_a_session_that_started_after_the_review_was_closed_does_not_excuse_the_builder(self):
+        w = self.w
+        sha = self.build()
+        w.linear(self.issues("completed", sha))                     # 建てたセッションが閉じた
+        time.sleep(1.2)
+        w.run("status", hook=START)                                 # そのあとに記録を作っても、閉じたのはそのセッションではない
+        rc, out = w.run("check", "--wellformed")
+        self.assertEqual(rc, 1)
+        self.assertIn(BUILT, out)
+
     def test_build_check_does_not_second_guess_a_later_session(self):
         w = self.w
         sha = self.build()

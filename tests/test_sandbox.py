@@ -39,10 +39,15 @@ class SandboxTest(unittest.TestCase):
             open(os.path.join(self.git, "probe"), "w").close()
 
     def files(self):
-        """作業ツリーにあるもの全部（無視されているものも含む）と、.git の中身の一覧。"""
-        seen = set()
-        for folder, _, names in os.walk(self.w.repo):
-            seen.update(os.path.relpath(os.path.join(folder, n), self.w.repo) for n in names)
+        """作業ツリーと .git にあるもの全部（無視されているものも含む）。ファイルは種別・権限・大きさ・更新時刻、
+        フォルダは存在と権限。空フォルダを足す、中身を書き換える、鍵を外して書き戻す、のどれも差になる。"""
+        seen = {}
+        for folder, dirs, names in os.walk(self.w.repo):
+            for n in dirs + names:
+                full = os.path.join(folder, n)
+                st = os.lstat(full)
+                key = os.path.relpath(full, self.w.repo)
+                seen[key] = (st.st_mode,) if n in dirs else (st.st_mode, st.st_size, st.st_mtime_ns)
         return seen
 
     def run_all(self, session):
@@ -52,7 +57,7 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn(COUNTS, out)
         self.assertIn("食い違い  なし", out)
-        self.w.run("status", hook=start)
+        self.assertEqual(self.w.run("status", hook=start)[0], 0)
         self.assertEqual(self.w.run("check", hook=stop), (0, ""))
         self.w.write("app/new.txt", "commit していない\n")
         verdict = json.loads(self.w.run("check", hook=stop)[1])
