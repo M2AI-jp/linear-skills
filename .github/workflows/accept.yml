@@ -7,6 +7,8 @@ permissions:
   contents: read
 jobs:
   gate:
+    # main's branch protection requires a check with this name; keep it so the gate is the required check.
+    name: Skill package structure
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
