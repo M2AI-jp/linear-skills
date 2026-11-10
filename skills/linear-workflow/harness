@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """harness: 導出と門。標準ライブラリだけ。モデルを呼ばない。
 
-  harness status              現在地を出す（セッション開始のフックが呼ぶ）
-  harness check               このセッションで生じた食い違いが残っていれば止める（停止のフックが呼ぶ）
+  harness status              現在地を出す（セッション開始のフックが --hook を付けて呼ぶ）
+  harness check               このセッションで生じた食い違いが残っていれば止める（停止のフックが --hook を付けて呼ぶ）
   harness check --wellformed  建て終わったかを判定する
   harness gate [BASE]         緑だった受入を赤にする変更を通さない（CIが呼ぶ）
   harness accept              accept/ の下の、名前がIssue IDで始まる実行ファイルを1本ずつ走らせる
@@ -410,8 +410,9 @@ def render(repo, entry, d):
 
 # ---- フックの入出力 ----
 
-def hook_input():
-    if sys.stdin is None or sys.stdin.isatty():
+def hook_input(argv):
+    """フックから呼ばれたとき（--hook）だけ標準入力を読む。手で走らせたときは読まない。"""
+    if "--hook" not in argv:
         return {}
     try:
         data = json.loads(sys.stdin.read() or "{}")
@@ -575,8 +576,12 @@ def cmd_setup(repo):
         hooks = data.setdefault("hooks", {})
         for event, sub in (("SessionStart", "status"), ("Stop", "check")):
             groups = hooks.setdefault(event, [])
-            if not re.search(r"harness\W.{0,80}?\b" + sub, json.dumps(groups)):
-                cmd = f"h={target}; [ -x \"$h\" ] && exec \"$h\" {sub}; exit 0"
+            cmd = f"h={target}; [ -x \"$h\" ] && exec \"$h\" {sub} --hook; exit 0"
+            mine = [h for g in groups for h in g.get("hooks", [])
+                    if re.search(r"harness\W.{0,80}?\b" + sub, h.get("command", ""))]
+            for h in mine:
+                h["command"] = cmd
+            if not mine:
                 groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": TIMEOUT + 60}]})
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -621,7 +626,7 @@ def main(argv):
         return cmd_wellformed(repo, entry)
     if not entry:
         return 0
-    hook = hook_input()
+    hook = hook_input(argv)
     if sub == "status":
         return cmd_status(repo, entry, hook, "--fresh" in argv)
     return cmd_check(repo, entry, hook)

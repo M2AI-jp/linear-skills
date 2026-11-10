@@ -84,8 +84,18 @@ class World:
                                    "projectMilestones": {"nodes": [{"name": "予約"}]}}}, f, ensure_ascii=False)
 
     def run(self, *args, hook=None, cwd=None):
-        p = subprocess.run([HARNESS, *args], cwd=cwd or self.repo, capture_output=True, text=True, env=ENV,
-                           input=json.dumps(hook) if hook else "")
+        # フックは --hook を付けて、標準入力にJSONを渡す。手で走らせるときは標準入力を閉じない（読まれないこと）
+        if hook:
+            p = subprocess.run([HARNESS, *args, "--hook"], cwd=cwd or self.repo, capture_output=True, text=True,
+                               env=ENV, input=json.dumps(hook))
+        else:
+            reader, writer = os.pipe()
+            try:
+                p = subprocess.run([HARNESS, *args], cwd=cwd or self.repo, capture_output=True, text=True,
+                                   env=ENV, stdin=reader, timeout=120)
+            finally:
+                os.close(reader)
+                os.close(writer)
         return p.returncode, p.stdout.strip()
 
     def auto(self, ident, sha):
@@ -271,8 +281,12 @@ class HarnessTest(unittest.TestCase):
         self.assertIn("フックに harness status が登録されていない", out)
         w.write(".claude/settings.json", json.dumps({"permissions": {"deny": ["Bash(rm *)"]}}))
         self.assertEqual(w.run("setup")[0], 0)
-        self.assertEqual(w.run("setup")[0], 0)
+        old = w.json(".claude/settings.json")
+        old["hooks"]["Stop"][0]["hooks"][0]["command"] = "x/harness check"      # 前の版が登録した形
+        w.write(".claude/settings.json", json.dumps(old))
+        self.assertEqual(w.run("setup")[0], 0)                                  # 足さずに、書き換える
         settings = w.json(".claude/settings.json")
+        self.assertIn("check --hook", settings["hooks"]["Stop"][0]["hooks"][0]["command"])
         self.assertEqual(settings["permissions"], {"deny": ["Bash(rm *)"]})
         self.assertEqual(len(settings["hooks"]["SessionStart"]), 1)
         self.assertEqual(len(settings["hooks"]["Stop"]), 1)
@@ -291,6 +305,7 @@ class HarnessTest(unittest.TestCase):
                            input=json.dumps({"hook_event_name": "SessionStart", "session_id": "s2"}))
         self.assertEqual(p.returncode, 0)
         self.assertIn("additionalContext", p.stdout)
+        self.assertIn("--hook", command)
         p = subprocess.run(command.replace("harness", "missing"), shell=True, cwd=w.repo, capture_output=True, text=True, env=ENV)
         self.assertEqual((p.returncode, p.stdout), (0, ""))
 
