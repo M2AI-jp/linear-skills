@@ -282,7 +282,7 @@ def derive(repo, entry, fresh=False):
         res = (results or {}).get(ident)
         if t == "canceled":
             if res is not None:
-                P("stale:" + ident, f"{ident} {i['state']} だが、受入が残っている")
+                P("stale:" + ident, f"{ident} {i['state']} だが、受入が残っている。受入を消す")
             continue
         live = t in OPEN or not i["archived"]
         if kind is None:
@@ -299,15 +299,16 @@ def derive(repo, entry, fresh=False):
                 if not repo.rev(sha):
                     P("changed:" + ident, f"{ident} 受入の版 {sha[:7]} がこのリポジトリに無い: {path}")
                 elif repo.git("cat-file", "-e", f"{repo.sha}:{path}")[0] != 0:
-                    P("changed:" + ident, f"{ident} 受入が main から消えた: {path}")
+                    P("changed:" + ident, f"{ident} 受入が main から消えた: {path}。戻すか、基準を人が変えたのならIssueの受入を直す")
                 elif repo.git("diff", "--quiet", sha, repo.sha, "--", path)[0] != 0:
-                    P("changed:" + ident, f"{ident} 受入が、Issueに書いた版（{sha[:7]}）から変わった: {path}")
+                    P("changed:" + ident, f"{ident} 受入が、Issueに書いた版（{sha[:7]}）から変わった: {path}。"
+                      "基準を人が変えたのなら、所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す")
             if results is not None:
                 if res is None and live and t not in ("triage", "backlog"):
                     P("noline:" + ident, f"{ident} {i['state']} だが、main の受入に出てこない"
                       + ("（成果に到達できない）" if t == "completed" else ""))
                 elif res and not res["ok"] and t == "completed":
-                    P("red:" + ident, f"{ident} {i['title']} … {i['state']} なのに受入が落ちている")
+                    P("red:" + ident, f"{ident} {i['title']} … {i['state']} なのに受入が落ちている。コードを直すか、Issueを開き直す")
                 elif res and res["ok"] and t in OPEN:
                     P("green:" + ident, f"{ident} 受入が main で緑なのに {i['state']}。"
                       "終わっているなら完了に。着手前から緑なら、受入が何も確かめていない")
@@ -320,7 +321,7 @@ def derive(repo, entry, fresh=False):
             if t == "started" and kind == "自動" and not anywhere:
                 P("nostart:" + ident, f"{ident} {i['state']} だが、ブランチも commit も無い（ブランチ名か commit に Issue ID を入れる）")
             if t != "started" and outside:
-                P("moved:" + ident, f"{ident} {where}があるのに {i['state']} のまま")
+                P("moved:" + ident, f"{ident} {where}があるのに {i['state']} のまま。着手中にする")
             if t in ("triage", "backlog"):
                 d["backlog"] += 1
             elif i["waits"]:
@@ -334,7 +335,7 @@ def derive(repo, entry, fresh=False):
     loose = [x.split(None, 1)[1] for x in repo.git("status", "--porcelain")[1].splitlines() if len(x.split(None, 1)) == 2]
     if loose:
         P("dirty", f"commit されていない変更が {len(loose)} 件ある（{'、'.join(loose[:3])}{' ほか' if len(loose) > 3 else ''}）。"
-          "commit する（メッセージに Issue ID を入れる）か、捨てる")
+          "commit するか、捨てる（Issueの仕事なら、メッセージに Issue ID を入れる）")
 
     # このブランチ・作業ツリーが、main にある受入を変えていないか
     base = repo.git("merge-base", "HEAD", repo.sha)[1] if repo.head and repo.sha else ""
@@ -345,7 +346,7 @@ def derive(repo, entry, fresh=False):
             if status[:1] in ("M", "D", "R"):
                 for ident, path in anchors:
                     if name == path or name.startswith(path + "/"):
-                        P("tree:" + ident, f"{ident} 受入が、このブランチ／作業ツリーで変わっている: {name}")
+                        P("tree:" + ident, f"{ident} 受入が、このブランチ／作業ツリーで変わっている: {name}。受入は、実装した文脈では変えない")
 
     # モジュール表
     table = {}
@@ -501,11 +502,8 @@ def cmd_check(repo, entry, hook):
             return 0
         state["blocks"][digest] = count + 1
         save(path, state)
-    reason = ("止める前に、このセッションで生じたLinearと現実の食い違いを直す。\n" + lines + "\n"
-              "Linearの状態を現実に合わせる（着手したなら着手中に、受入が main で緑なら完了に）。"
-              "緑だった受入を落としたのなら、コードを直す。受入そのものを変えてよいのは、基準を変えると人が決めたときだけで、"
-              "そのときはIssueの所在を新しい commit に直して理由をコメントに残す。そうでなければ受入を戻す。"
-              "詳しくは " + guide(repo) + " の「引き直す」。")
+    reason = ("止める前に、このセッションで生じた食い違いを直す。\n" + lines + "\n"
+              "手順は " + guide(repo) + " の「引き直す」。同じ理由で止めるのは2回まで。")
     if as_hook:
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
         return 0
