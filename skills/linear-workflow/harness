@@ -231,14 +231,20 @@ def fetch(entry):
 # ---- 受入 ----
 
 def parse_lines(out):
-    results = {}
+    """「緑／赤 Issue ID 説明」の行を拾う。赤い行のすぐ下の字下げされた行は、その受入が出した末尾として持つ。"""
+    results, last = {}, None
     for line in out.splitlines():
         m = LINE.match(line)
         if m:
             ok = m.group(1).lower() in ("緑", "green")
             old = results.get(m.group(2))
-            results[m.group(2)] = {"ok": ok and (old["ok"] if old else True),
-                                   "text": (old or {}).get("text") or m.group(3).strip()}
+            last = results[m.group(2)] = {"ok": ok and (old["ok"] if old else True),
+                                          "text": (old or {}).get("text") or m.group(3).strip(),
+                                          "tail": (old or {}).get("tail", [])}
+        elif last is not None and not last["ok"] and line.startswith("    ") and len(last["tail"]) < 15:
+            last["tail"].append(line.strip()[:300])
+        else:
+            last = None
     return results
 
 
@@ -685,6 +691,10 @@ def cmd_gate(repo, base):
         print("受入を走らせられなかった: " + after["error"])
     red = sorted(k for k, r in now.items() if not r["ok"])
     print(f"この版の受入  緑 {len(now) - len(red)} ／ 赤 {len(red)}" + ("（" + "、".join(red) + "）" if red else ""))
+    for k in red:
+        print(f"  赤 {k} {now[k]['text']}")
+        for line in now[k].get("tail", []):
+            print("      " + line)
     if broken:
         return 1
     print(f"緑だった受入 {sum(r['ok'] for r in before.values())} 本は緑のまま")
