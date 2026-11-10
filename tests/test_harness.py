@@ -27,11 +27,13 @@ STATES = {"backlog": "Backlog", "unstarted": "Todo", "started": "In Progress",
 
 
 def issue(ident, kind, desc="", archived=False, blocked_by=()):
+    """blocked_by は、待っているIssueのID→その状態の種類。並びで渡せば、どれも未着手。"""
+    waits = blocked_by if isinstance(blocked_by, dict) else {b: "unstarted" for b in blocked_by}
     return {"identifier": ident, "title": "題 " + ident, "description": desc,
             "archivedAt": "2026-01-01T00:00:00Z" if archived else None,
             "state": {"name": STATES[kind], "type": kind}, "projectMilestone": {"name": "予約"},
             "inverseRelations": {"nodes": [
-                {"type": "blocks", "issue": {"identifier": b, "state": {"type": "unstarted"}}} for b in blocked_by]}}
+                {"type": "blocks", "issue": {"identifier": b, "state": {"type": t}}} for b, t in waits.items()]}}
 
 
 class World:
