@@ -117,15 +117,18 @@ class HarnessTest(unittest.TestCase):
         self.addCleanup(self.w.close)
 
     def standard(self):
-        """DEMO-1 は Done で緑、DEMO-2 は Todo で赤、DEMO-3 は DEMO-2 待ち。食い違いは無い。"""
+        """DEMO-1 は Done で緑、DEMO-2 は Todo で赤、DEMO-3 は DEMO-2 待ち。食い違いは無い。
+        DEMO-0 は受入を見直したIssueで、もう閉じている。DEMO-2 と DEMO-3 はそれを待っていた。"""
         w = self.w
         w.accept("DEMO-1", True)
         w.accept("DEMO-2", False)
         w.accept("DEMO-3", False)
         sha = w.commit("DEMO-1 を実装し、受入を置く")
         issues = [issue("DEMO-1", "completed", w.auto("DEMO-1", sha)),
-                  issue("DEMO-2", "unstarted", w.auto("DEMO-2", sha)),
-                  issue("DEMO-3", "unstarted", w.auto("DEMO-3", sha), blocked_by=["DEMO-2"])]
+                  issue("DEMO-2", "unstarted", w.auto("DEMO-2", sha), blocked_by={"DEMO-0": "completed"}),
+                  issue("DEMO-3", "unstarted", w.auto("DEMO-3", sha),
+                        blocked_by={"DEMO-0": "completed", "DEMO-2": "unstarted"}),
+                  issue("DEMO-0", "completed", "受入（見直し）: 受入の抜け道を挙げて直した https://example.com/review")]
         w.linear(issues)
         return sha, issues
 
@@ -251,7 +254,7 @@ class HarnessTest(unittest.TestCase):
 
         issues[1]["state"] = {"name": "Done", "type": "completed"}
         issues[1]["description"] = w.auto("DEMO-2", w.git("rev-parse", "HEAD"))
-        issues[2]["inverseRelations"] = {"nodes": []}
+        issues[2]["inverseRelations"]["nodes"] = issues[2]["inverseRelations"]["nodes"][:1]
         w.linear(issues)
         self.assertEqual(w.run("check", hook=stop), (0, ""))       # 書き戻したら黙って通す
 

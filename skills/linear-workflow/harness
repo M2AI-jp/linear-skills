@@ -23,11 +23,13 @@ Issue本文の受入。1行。
   受入（自動）: <観測できる結果> <パス>@<commit>   パスは main にあり、その commit の版から変わっていないこと
   受入（証拠）: <観測できる結果> <完了時に、リンクか commit>
   受入（人）: <誰が何を確かめるか>
+  受入（見直し）: <どのIssueの受入の抜け道を、別の文脈が挙げて直すか> <完了時に、リンクか commit>
 
 check --wellformed が見るもの。
   入口の5行がある。受入コマンドが main の版で走り、行を出す。Linearに届き、正本のProjectが引ける
   Todo・In Progress・Done のIssueに受入がある。自動なら所在があり、main の出力に行がある
   Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
+  自動の受入を持つ、開いているIssueは、受入（見直し）のIssueを待っている（Blocked by）
   モジュール表のディレクトリがあり、Milestone と1対1
   フックに status と check が登録してある。GitHub の remote があれば、CIに gate がある
   commit されていない変更が無い。前線（Blocked by の無い、開いているIssue）がある
@@ -43,7 +45,7 @@ import urllib.request
 
 ID = r"[A-Z][A-Z0-9]*-[0-9]+"
 LINE = re.compile(rf"^\s*(緑|赤|green|red)\s+({ID})(?![0-9])[\s:：-]*(.*)$", re.I)
-DECL = re.compile(r"受入\s*[（(]\s*(自動|証拠|人)\s*[）)]\s*[:：]?\s*(.*)")
+DECL = re.compile(r"受入\s*[（(]\s*(自動|証拠|人|見直し)\s*[）)]\s*[:：]?\s*(.*)")
 ANCHOR = re.compile(r"([^\s`@（）()「」、]+)@([0-9a-f]{7,40})(?![0-9a-f])")
 TIMEOUT = int(os.environ.get("HARNESS_TIMEOUT", "240"))
 OPEN = ("triage", "backlog", "unstarted", "started")
@@ -184,6 +186,8 @@ def fetch(entry):
                 "kind": decl.group(1) if decl else None, "decl": decl.group(2) if decl else "",
                 "waits": sorted(r["issue"]["identifier"] for r in n["inverseRelations"]["nodes"]
                                 if r["type"] == "blocks" and r["issue"]["state"]["type"] in OPEN),
+                "waited": [r["issue"]["identifier"] for r in n["inverseRelations"]["nodes"]
+                           if r["type"] == "blocks" and r["issue"]["state"]["type"] != "canceled"],
             })
         if not page["pageInfo"]["hasNextPage"]:
             break
@@ -333,9 +337,16 @@ def derive(repo, entry, fresh=False):
                 elif res and res["ok"] and t in OPEN:
                     P("green:" + ident, f"{ident} 受入が main で緑なのに {i['state']}。"
                       "終わっているなら完了に。着手前から緑なら、受入が何も確かめていない")
-        elif kind == "証拠":
+        elif kind in ("証拠", "見直し"):
             if t == "completed" and not i["archived"] and not re.search(r"https?://|(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])", i["decl"]):
-                P("noevidence:" + ident, f"{ident} {i['state']}（証拠）だが、証拠のリンクが無い")
+                P("noevidence:" + ident, f"{ident} {i['state']}（{kind}）だが、証拠のリンクが無い")
+        # 受入は、書いたのとは別の文脈に攻めさせてから実装に入る
+        if kind == "自動" and t in ("unstarted", "started") and not any(
+                known.get(b, {}).get("kind") == "見直し" for b in i["waited"]):
+            P("noreview:" + ident, f"{ident} 受入が、別の文脈に攻めさせるIssueを待っていない"
+              "（受入（見直し）のIssueを立て、Blocked by を張る）")
+        if t == "started" and i["waits"]:
+            P("early:" + ident, f"{ident} が、{'、'.join(i['waits'])} の終わる前に着手されている")
         if t in OPEN:
             outside, anywhere, where = work(repo, ident)
             i["where"] = where
