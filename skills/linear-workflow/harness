@@ -1,15 +1,36 @@
 #!/usr/bin/env python3
-"""harness: 導出と門。標準ライブラリだけ。モデルを呼ばない。
+"""harness: 導出と門。標準ライブラリだけ。モデルを呼ばず、Linearには書かない。
 
   harness status              現在地を出す（セッション開始のフックが --hook を付けて呼ぶ）
   harness check               このセッションで生じた食い違いが残っていれば止める（停止のフックが --hook を付けて呼ぶ）
   harness check --wellformed  建て終わったかを判定する
   harness gate [BASE]         緑だった受入を赤にする変更を通さない（CIが呼ぶ）
-  harness accept              accept/ の下の、名前がIssue IDで始まる実行ファイルを1本ずつ走らせる
+  harness accept              accept/ の下の受入を1本ずつ走らせる
   harness setup               フックとCIを登録する
 
-入口（AGENTS.md か CLAUDE.md の「## 進め方」）が無いリポジトリでは、何も出さずに終わる。
-Linearは読むだけで、書かない。
+入口。AGENTS.md か CLAUDE.md に置く。無いリポジトリでは、何も出さずに終わる。
+  ## 進め方
+  - 正本: <Linear Project のURL>
+  - Linearの叩き方: `<GraphQLのJSONを標準入力で受けて、応答のJSONを返すコマンド>`（無ければ環境変数 LINEAR_API_KEY）
+  - 受入: `<コマンド>`（行ごとに「緑 <Issue ID> 説明」か「赤 <Issue ID> 説明」を出す。ふつうは harness accept）
+  - モジュール: <ディレクトリ> = <Milestone>、…、. = つなぎ
+  - 確認が要る: <取り消しにくい操作>
+
+受入のファイル。accept/<Issue ID>_<名前>。実行できること。終了コード0が緑。最初のコメント行が説明になる。
+追跡されているファイルだけの場所（main の版）で走る。
+
+Issue本文の受入。1行。
+  受入（自動）: <観測できる結果> <パス>@<commit>   パスは main にあり、その commit の版から変わっていないこと
+  受入（証拠）: <観測できる結果> <完了時に、リンクか commit>
+  受入（人）: <誰が何を確かめるか>
+
+check --wellformed が見るもの。
+  入口の5行がある。受入コマンドが main の版で走り、行を出す。Linearに届き、正本のProjectが引ける
+  Todo・In Progress・Done のIssueに受入がある。自動なら所在があり、main の出力に行がある
+  Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
+  モジュール表のディレクトリがあり、Milestone と1対1
+  フックに status と check が登録してある。GitHub の remote があれば、CIに gate がある
+  commit されていない変更が無い。前線（Blocked by の無い、開いているIssue）がある
 """
 import hashlib
 import json
