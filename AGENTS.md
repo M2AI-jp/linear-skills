@@ -13,3 +13,10 @@
 前の版（3スキル＋共通契約＋Hook）は Linear Project `052491f9-4937-4c82-8bb5-c7b0fb563ecd` が所有する。2026-10-14 に干渉を理由に撤去され、Completed のまま残っている。当時の記録として読み、その受入を現在の合格に流用しない。当時の資料は `../../Documents/ChatGPT/Linear/` にある（`SSOT.md` は当時の設計方針、`acceptance/` は受入入力と採点方法）。いずれも現在の必須工程ではない。
 
 現在の進捗や状態の写しをこの入口へ追加しない。
+
+## 進め方
+- 正本: https://linear.app/matsunai/project/linear-skills-メタハーネス-f87a91fbda72
+- Linearの叩き方: `~/.local/bin/linear-api`（GraphQLのJSONを標準入力で渡す）
+- 受入: `skills/linear-workflow/harness accept`（出力は Issue ID ごとの緑・赤）
+- モジュール: skills/linear-workflow = 配布物、. = つなぎ
+- 確認が要る: Linearの既存Issueのアーカイブと削除、スキルの導入（`~/.claude/skills`・`~/.codex/skills`・ほかのリポジトリへの配置）、このリポジトリの外への一切の操作

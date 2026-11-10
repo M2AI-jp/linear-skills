@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""harness: 導出と門。標準ライブラリだけ。モデルを呼ばない。
+
+  harness status              現在地を出す（セッション開始のフックが呼ぶ）
+  harness check               このセッションで生じた食い違いが残っていれば止める（停止のフックが呼ぶ）
+  harness check --wellformed  建て終わったかを判定する
+  harness gate [BASE]         緑だった受入を赤にする変更を通さない（CIが呼ぶ）
+  harness accept              accept/ の下の、名前がIssue IDで始まる実行ファイルを1本ずつ走らせる
+  harness setup               フックとCIを登録する
+
+入口（AGENTS.md か CLAUDE.md の「## 進め方」）が無いリポジトリでは、何も出さずに終わる。
+Linearは読むだけで、書かない。
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+
+ID = r"[A-Z][A-Z0-9]*-[0-9]+"
+LINE = re.compile(rf"^\s*(緑|赤|green|red)\s+({ID})(?![0-9])[\s:：-]*(.*)$", re.I)
+DECL = re.compile(r"受入\s*[（(]\s*(自動|証拠|人)\s*[）)]\s*[:：]?\s*(.*)")
+ANCHOR = re.compile(r"([^\s`@（）()「」、]+)@([0-9a-f]{7,40})(?![0-9a-f])")
+TIMEOUT = int(os.environ.get("HARNESS_TIMEOUT", "240"))
+OPEN = ("triage", "backlog", "unstarted", "started")
+HOOKS = (".claude/settings.json", ".codex/hooks.json")
+
+
+def git(*args, cwd=None):
+    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    return p.returncode, p.stdout.strip()
+
+
+def sh(cmd, cwd, timeout, stdin=None, env=None):
+    try:
+        p = subprocess.run(cmd, shell=True, cwd=cwd, input=stdin, capture_output=True,
+                           text=True, timeout=timeout, env=env)
+        return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired:
+        return None, "", f"{timeout} 秒で終わらなかった"
+
+
+def last_line(text):
+    lines = [x for x in text.strip().splitlines() if x.strip()]
+    return lines[-1].strip()[:200] if lines else ""
+
+
+# ---- 入口 ----
+
+def parse_entry(text):
+    m = re.search(r"^##\s*進め方\s*$(.*?)(?=^#|\Z)", text, re.M | re.S)
+    if not m:
+        return None
+    entry = {}
+    for key, value in re.findall(r"^\s*[-*]\s*([^:：\n]+?)\s*[:：]\s*(.+)$", m.group(1), re.M):
+        entry.setdefault(key.strip(), value.strip())
+    return entry if entry.get("正本") else None
+
+
+def read_entry(root):
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        try:
+            with open(os.path.join(root, name), encoding="utf-8") as f:
+                entry = parse_entry(f.read())
+        except OSError:
+            continue
+        if entry:
+            return entry
+    return None
+
+
+def quoted(value):
+    m = re.search(r"`([^`]+)`", value or "")
+    return m.group(1).strip() if m else None
+
+
+class Repo:
+    def __init__(self, root):
+        self.root = root
+        common = git("rev-parse", "--git-common-dir", cwd=root)[1]
+        self.store = os.path.join(os.path.normpath(os.path.join(root, common)), "harness")
+        self.main = self._main()
+        self.sha = self.rev(self.main) if self.main else ""
+        self.head = self.rev("HEAD")
+
+    def rev(self, ref):
+        return git("rev-parse", "--verify", "-q", ref + "^{commit}", cwd=self.root)[1]
+
+    def _main(self):
+        name = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD", cwd=self.root)[1]
+        name = name.replace("origin/", "", 1)
+        for ref in ([name, "origin/" + name] if name else []) + ["main", "origin/main", "master", "origin/master"]:
+            if self.rev(ref):
+                return ref
+        return ""
+
+    def git(self, *args):
+        return git(*args, cwd=self.root)
+
+
+def find_repo():
+    rc, root = git("rev-parse", "--show-toplevel")
+    return Repo(root) if rc == 0 and root else None
+
+
+# ---- Linear（読むだけ） ----
+
+class Unreachable(Exception):
+    pass
+
+
+def linear(entry, query, variables):
+    payload = json.dumps({"query": query, "variables": variables})
+    cmd = quoted(entry.get("Linearの叩き方"))
+    try:
+        if cmd:
+            rc, out, err = sh(cmd, None, 60, stdin=payload)
+            if rc != 0:
+                raise Unreachable(last_line(err) or last_line(out) or "コマンドが失敗した")
+            data = json.loads(out)
+        elif os.environ.get("LINEAR_API_KEY"):
+            req = urllib.request.Request(
+                "https://api.linear.app/graphql", data=payload.encode("utf-8"),
+                headers={"Authorization": os.environ["LINEAR_API_KEY"], "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.load(r)
+        else:
+            raise Unreachable("入口の「Linearの叩き方」に、GraphQLのJSONを標準入力で受けるコマンドを `…` で書く"
+                              "（または LINEAR_API_KEY を渡す）")
+    except (OSError, ValueError) as e:
+        raise Unreachable(str(e)[:200]) from None
+    if not isinstance(data, dict) or data.get("errors") or not data.get("data"):
+        raise Unreachable("Linearがエラーを返した")
+    return data["data"]
+
+
+PROJECT_Q = "query($id:String!){project(id:$id){id name status{type name} projectMilestones{nodes{name}}}}"
+ISSUES_Q = """query($id:ID!,$after:String){issues(filter:{project:{id:{eq:$id}}},includeArchived:true,first:100,after:$after){
+nodes{identifier title description archivedAt state{name type} projectMilestone{name}
+inverseRelations(first:30){nodes{type issue{identifier state{type}}}}}
+pageInfo{hasNextPage endCursor}}}"""
+
+
+def fetch(entry):
+    m = re.search(r"/project/([^/?#\s)>]+)", entry["正本"])
+    if not m:
+        raise Unreachable("入口の「正本」がLinearのProjectのURLではない")
+    project = linear(entry, PROJECT_Q, {"id": m.group(1).rsplit("-", 1)[-1]}).get("project")
+    if not project:
+        raise Unreachable("入口の「正本」のProjectが引けない")
+    issues, after = [], None
+    while True:
+        page = linear(entry, ISSUES_Q, {"id": project["id"], "after": after})["issues"]
+        for n in page["nodes"]:
+            decl = DECL.search(n.get("description") or "")
+            issues.append({
+                "id": n["identifier"], "title": n["title"], "state": n["state"]["name"],
+                "type": n["state"]["type"], "archived": bool(n.get("archivedAt")),
+                "milestone": (n.get("projectMilestone") or {}).get("name"),
+                "kind": decl.group(1) if decl else None, "decl": decl.group(2) if decl else "",
+                "waits": sorted(r["issue"]["identifier"] for r in n["inverseRelations"]["nodes"]
+                                if r["type"] == "blocks" and r["issue"]["state"]["type"] in OPEN),
+            })
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    return {"name": project["name"], "status": project["status"]["type"],
+            "milestones": [x["name"] for x in project["projectMilestones"]["nodes"]]}, issues
+
+
+# ---- 受入 ----
+
+def parse_lines(out):
+    results = {}
+    for line in out.splitlines():
+        m = LINE.match(line)
+        if m:
+            ok = m.group(1).lower() in ("緑", "green")
+            old = results.get(m.group(2))
+            results[m.group(2)] = {"ok": ok and (old["ok"] if old else True),
+                                   "text": (old or {}).get("text") or m.group(3).strip()}
+    return results
+
+
+def accept_at(repo, sha, fresh=False):
+    """sha の版で受入コマンドを走らせる。CIと同じく、追跡されているファイルだけがある場所で走る。"""
+    cache = os.path.join(repo.store, "accept", sha + ".json")
+    if not fresh and os.path.exists(cache):
+        with open(cache, encoding="utf-8") as f:
+            return json.load(f)
+    entry = None
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        rc, text = repo.git("show", f"{sha}:{name}")
+        entry = entry or (parse_entry(text) if rc == 0 else None)
+    cmd = entry and (quoted(entry.get("受入")) or re.split(r"[（(]", entry.get("受入", ""), maxsplit=1)[0].strip())
+    if not cmd:
+        return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い"}
+    tree = os.path.join(repo.store, "tree")
+    repo.git("worktree", "prune")
+    if os.path.isdir(tree):
+        rc, _ = git("checkout", "--force", "--detach", sha, cwd=tree)
+    else:
+        os.makedirs(repo.store, exist_ok=True)
+        rc, _ = repo.git("worktree", "add", "--force", "--detach", tree, sha)
+    if rc != 0:
+        return {"error": "受入を走らせる場所を用意できなかった"}
+    rc, out, err = sh(cmd, tree, TIMEOUT, env={**os.environ, "HARNESS_ROOT": repo.root})
+    if rc is None:
+        return {"error": "受入が " + err}
+    results = parse_lines(out)
+    if not results:
+        return {"error": "受入コマンドの出力に「緑／赤 Issue ID」の行が無い" + ("（" + last_line(err) + "）" if last_line(err) else "")}
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    with open(cache, "w", encoding="utf-8") as f:
+        json.dump({"results": results}, f, ensure_ascii=False)
+    return {"results": results}
+
+
+def cmd_accept():
+    names = sorted(os.listdir("accept")) if os.path.isdir("accept") else []
+    red = False
+    for name in names:
+        path = os.path.join("accept", name)
+        m = re.match(rf"({ID})(?![0-9])", name)
+        if not m or not os.path.isfile(path) or not os.access(path, os.X_OK):
+            continue
+        title = ""
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f.readlines()[:10]:
+                t = re.match(r"\s*(?:#|//|--)\s?(?!!)(.+)", line)
+                if t:
+                    title = t.group(1).strip()
+                    break
+        rc, out, err = sh("./" + path, ".", TIMEOUT)
+        print(("緑" if rc == 0 else "赤"), m.group(1), title)
+        if rc != 0:
+            red = True
+            for line in (out + err).strip().splitlines()[-15:]:
+                print("    " + line)
+    return 1 if red else 0
+
+
+# ---- 導出 ----
+
+def work(repo, ident):
+    """Issue の仕事が git のどこにあるか。(main の外にあるか, どこかにあるか, 説明)"""
+    grep = ["-i", "-E", "--grep=" + ident + "([^0-9]|$)", "--max-count=1"]
+    word = re.compile(rf"(?<![A-Za-z0-9]){re.escape(ident)}(?![0-9])", re.I)
+    refs = repo.git("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes")[1].split()
+    named = [r for r in refs if word.search(r)]
+    for ref in named:
+        ahead = repo.git("rev-list", "--count", f"{repo.main}..{ref}")[1]
+        if ahead not in ("", "0"):
+            return True, True, f"ブランチ {ref}（main より {ahead} 先）"
+    if repo.git("rev-list", "--branches", "--remotes", "--not", repo.main, *grep)[1]:
+        return True, True, "main に入っていない commit"
+    return False, bool(named or repo.git("rev-list", "--branches", "--remotes", *grep)[1]), ""
+
+
+def derive(repo, entry, fresh=False):
+    d = {"problems": [], "front": [], "waiting": [], "backlog": 0, "linear": None, "issues": None}
+    acc = accept_at(repo, repo.sha, fresh) if repo.sha else {"error": "commit がまだ無い"}
+    d["accept_error"], results = acc.get("error"), acc.get("results")
+    d["results"] = results
+
+    def P(key, text):
+        d["problems"].append((key, text))
+
+    try:
+        project, issues = fetch(entry)
+    except Unreachable as e:
+        d["linear"] = str(e)
+        return d
+    d["issues"], d["project"] = issues, project
+    known = {i["id"]: i for i in issues}
+    anchors = []
+    for i in issues:
+        ident, t, kind = i["id"], i["type"], i["kind"]
+        res = (results or {}).get(ident)
+        if t == "canceled":
+            if res is not None:
+                P("stale:" + ident, f"{ident} {i['state']} だが、受入が残っている")
+            continue
+        live = t in OPEN or not i["archived"]
+        if kind is None:
+            if live and t not in ("triage", "backlog"):
+                P("noaccept:" + ident, f"{ident} {i['state']} だが、受入が無い"
+                  "（Issue本文に「受入（自動）: 観測できる結果 パス@commit」。コードで確かめられないなら（証拠）か（人））")
+        elif kind == "自動":
+            found = ANCHOR.findall(i["decl"])
+            if not found and live and t not in ("triage", "backlog"):
+                P("noanchor:" + ident, f"{ident} 受入（自動）に所在（パス@commit）が無い")
+            for path, sha in found:
+                path = path.rstrip("/")
+                anchors.append((ident, path))
+                if not repo.rev(sha):
+                    P("changed:" + ident, f"{ident} 受入の版 {sha[:7]} がこのリポジトリに無い: {path}")
+                elif repo.git("cat-file", "-e", f"{repo.sha}:{path}")[0] != 0:
+                    P("changed:" + ident, f"{ident} 受入が main から消えた: {path}")
+                elif repo.git("diff", "--quiet", sha, repo.sha, "--", path)[0] != 0:
+                    P("changed:" + ident, f"{ident} 受入が、Issueに書いた版（{sha[:7]}）から変わった: {path}")
+            if results is not None:
+                if res is None and live and t not in ("triage", "backlog"):
+                    P("noline:" + ident, f"{ident} {i['state']} だが、main の受入に出てこない"
+                      + ("（成果に到達できない）" if t == "completed" else ""))
+                elif res and not res["ok"] and t == "completed":
+                    P("red:" + ident, f"{ident} {i['title']} … {i['state']} なのに受入が落ちている")
+                elif res and res["ok"] and t in OPEN:
+                    P("green:" + ident, f"{ident} 受入が main で緑なのに {i['state']}。"
+                      "終わっているなら完了に。着手前から緑なら、受入が何も確かめていない")
+        elif kind == "証拠":
+            if t == "completed" and not i["archived"] and not re.search(r"https?://|(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])", i["decl"]):
+                P("noevidence:" + ident, f"{ident} {i['state']}（証拠）だが、証拠のリンクが無い")
+        if t in OPEN:
+            outside, anywhere, where = work(repo, ident)
+            i["where"] = where
+            if t == "started" and kind == "自動" and not anywhere:
+                P("nostart:" + ident, f"{ident} {i['state']} だが、ブランチも commit も無い（ブランチ名か commit に Issue ID を入れる）")
+            if t != "started" and outside:
+                P("moved:" + ident, f"{ident} {where}があるのに {i['state']} のまま")
+            if t in ("triage", "backlog"):
+                d["backlog"] += 1
+            elif i["waits"]:
+                d["waiting"].append(i)
+            else:
+                d["front"].append(i)
+    for ident in sorted(set(results or {}) - set(known)):
+        P("orphan:" + ident, f"{ident} 受入の出力にあるが、このProjectにIssueが無い")
+
+    # このブランチ・作業ツリーが、main にある受入を変えていないか
+    base = repo.git("merge-base", "HEAD", repo.sha)[1] if repo.head and repo.sha else ""
+    if base and anchors:
+        changed = repo.git("diff", "--name-status", base, "--", *sorted({p for _, p in anchors}))[1]
+        for line in changed.splitlines():
+            status, _, name = line.partition("\t")
+            if status[:1] in ("M", "D", "R"):
+                for ident, path in anchors:
+                    if name == path or name.startswith(path + "/"):
+                        P("tree:" + ident, f"{ident} 受入が、このブランチ／作業ツリーで変わっている: {name}")
+
+    # モジュール表
+    table = {}
+    for pair in re.split(r"[、,]", entry.get("モジュール", "")):
+        if "=" in pair:
+            folder, name = (x.strip(" `　") for x in pair.split("=", 1))
+            table[name] = folder
+            if not os.path.isdir(os.path.join(repo.root, folder)):
+                P("module:" + folder, f"入口のモジュール {folder} が無い")
+            if name not in project["milestones"]:
+                P("module:" + name, f"入口の Milestone「{name}」がProjectに無い")
+    for name in project["milestones"]:
+        if name not in table:
+            P("module:" + name, f"Milestone「{name}」に対応するディレクトリが入口に無い")
+
+    # Project の状態
+    opened = [i for i in issues if i["type"] in OPEN]
+    green = bool(results) and all(r["ok"] for r in results.values())
+    if project["status"] == "completed":
+        if opened or (results is not None and not green):
+            P("project", "Project は完了になっているが、" + ("開いているIssueがある" if opened else "受入が落ちている"))
+    elif project["status"] != "canceled" and issues and not opened and green:
+        P("project", "開いているIssueが無く、受入が全部緑。Project を完了にする")
+    return d
+
+
+def render(repo, entry, d):
+    out = [f"現在地（導出 {repo.main or '?'}@{repo.sha[:7]}）"]
+    if repo.head and repo.head != repo.sha:
+        name = repo.git("rev-parse", "--abbrev-ref", "HEAD")[1]
+        ahead = repo.git("rev-list", "--count", f"{repo.sha}..HEAD")[1]
+        out.append(f"いま  {name}@{repo.head[:7]}（main より {ahead} 先）")
+    results, known = d["results"], {i["id"]: i for i in d["issues"] or []}
+    if results is None:
+        out.append("受入  走らせられなかった: " + d["accept_error"])
+    elif d["issues"] is None:
+        out.append(f"受入  緑 {sum(r['ok'] for r in results.values())} ／ 赤 {sum(not r['ok'] for r in results.values())}")
+    else:
+        red = [k for k, r in results.items() if not r["ok"] and known.get(k, {}).get("type") not in OPEN]
+        todo = [k for k, r in results.items() if not r["ok"] and k not in red]
+        out.append(f"受入  緑 {sum(r['ok'] for r in results.values())} ／ 赤 {len(red)} ／ 未実装 {len(todo)}")
+    if d["linear"]:
+        out.append("Linear  届かない: " + d["linear"] + "（Linearの状態は確かめていない）")
+    else:
+        def row(i):
+            extra = [i["state"]] + ([i["where"]] if i.get("where") else [])
+            return f"{i['id']} {i['title']}（{'、'.join(extra)}）"
+        front = sorted(d["front"], key=lambda i: i["type"] != "started")
+        for n, i in enumerate(front[:12]):
+            out.append(("前線  " if n == 0 else "      ") + row(i))
+        if len(front) > 12:
+            out.append(f"      ほか {len(front) - 12} 件")
+        if not front:
+            out.append("前線  なし")
+        for n, i in enumerate(d["waiting"][:12]):
+            out.append(("待ち  " if n == 0 else "      ") + f"{i['id']} {i['title']}（{'、'.join(i['waits'])} 待ち）")
+        if d["backlog"]:
+            out.append(f"Backlog  {d['backlog']} 件（受入はまだ無い）")
+        if d["problems"]:
+            out.append("食い違い")
+            out += ["  " + text for _, text in d["problems"]]
+        else:
+            out.append("食い違い  なし")
+    if entry.get("確認が要る"):
+        out.append("確認が要る  " + entry["確認が要る"])
+    return "\n".join(out)
+
+
+# ---- フックの入出力 ----
+
+def hook_input():
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        return {}
+
+
+def session_file(repo, hook):
+    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(hook.get("session_id") or ""))
+    return os.path.join(repo.store, "session", sid + ".json") if sid else None
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def cmd_status(repo, entry, hook, fresh):
+    d = derive(repo, entry, fresh)
+    text = render(repo, entry, d)
+    path = session_file(repo, hook)
+    if path and not os.path.exists(path) and not d["linear"]:
+        save(path, {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}})
+        folder = os.path.dirname(path)
+        for name in os.listdir(folder):
+            if time.time() - os.path.getmtime(os.path.join(folder, name)) > 14 * 86400:
+                os.remove(os.path.join(folder, name))
+    if hook.get("hook_event_name"):
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}},
+                         ensure_ascii=False))
+    else:
+        print(text)
+    return 0
+
+
+def cmd_check(repo, entry, hook):
+    """このセッションで生じた食い違いが残っていれば止める。同じ理由で止めるのは2回まで。"""
+    d = derive(repo, entry)
+    as_hook = bool(hook.get("hook_event_name"))
+    if d["linear"]:
+        if as_hook:
+            print(json.dumps({"systemMessage": "harness: Linearに届かないので、状態を確かめずに通した（" + d["linear"] + "）"},
+                             ensure_ascii=False))
+        else:
+            print("Linearに届かない: " + d["linear"])
+        return 0
+    path = session_file(repo, hook)
+    state = (load(path) if path else None)
+    if path and state is None:
+        save(path, {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}})
+        return 0
+    known = set(state["keys"]) if state else set()
+    new = [(k, t) for k, t in d["problems"] if k not in known]
+    if not new:
+        return 0
+    lines = "\n".join("  " + t for _, t in new)
+    digest = hashlib.sha256("\n".join(sorted(k for k, _ in new)).encode()).hexdigest()[:16]
+    if state is not None:
+        count = state["blocks"].get(digest, 0)
+        if count >= 2:
+            print(json.dumps({"systemMessage": "harness: 同じ理由で2回止めたので通した。食い違いは残っている\n" + lines},
+                             ensure_ascii=False))
+            return 0
+        state["blocks"][digest] = count + 1
+        save(path, state)
+    reason = ("止める前に、このセッションで生じたLinearと現実の食い違いを直す。\n" + lines + "\n"
+              "Linearの状態を現実に合わせる（着手したなら着手中に、受入が main で緑なら完了に）。"
+              "緑だった受入を落としたのなら、コードを直す。受入そのものを変えてよいのは、基準を変えると人が決めたときだけで、"
+              "そのときはIssueの所在を新しい commit に直して理由をコメントに残す。そうでなければ受入を戻す。")
+    if as_hook:
+        print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+        return 0
+    print(reason)
+    return 1
+
+
+def cmd_wellformed(repo, entry):
+    faults = [f"入口に「{k}」が無い" for k in ("正本", "Linearの叩き方", "受入", "モジュール", "確認が要る") if not entry.get(k)]
+    d = derive(repo, entry, fresh=True)
+    if d["accept_error"]:
+        faults.append("受入を走らせられない: " + d["accept_error"])
+    if d["linear"]:
+        faults.append("Linearに届かない: " + d["linear"])
+    faults += [text for _, text in d["problems"]]
+    if d["issues"] is not None and not d["front"] and not d["waiting"]:
+        faults.append("前線が無い（受入を持つ、開いているIssueが無い）")
+    registered = ""
+    for name in HOOKS:
+        try:
+            with open(os.path.join(repo.root, name), encoding="utf-8") as f:
+                registered += f.read()
+        except OSError:
+            pass
+    for sub in ("status", "check"):
+        if not re.search(r"harness\W.{0,80}?\b" + sub, registered):
+            faults.append(f"フックに harness {sub} が登録されていない（harness setup）")
+    if "github.com" in repo.git("remote", "get-url", "origin")[1]:
+        flows = os.path.join(repo.root, ".github", "workflows")
+        texts = ""
+        for name in (os.listdir(flows) if os.path.isdir(flows) else []):
+            with open(os.path.join(flows, name), encoding="utf-8", errors="replace") as f:
+                texts += f.read()
+        if not re.search(r"harness\W+gate", texts):
+            faults.append("CIに harness gate が無い（harness setup）")
+    if faults:
+        print("まだ整っていない")
+        print("\n".join("  " + x for x in faults))
+        return 1
+    print("整っている")
+    print(render(repo, entry, d))
+    return 0
+
+
+def cmd_gate(repo, base):
+    """緑だった受入が、赤になるか消えるなら通さない。"""
+    if not repo.head:
+        return 0
+    if base and re.fullmatch(r"0+", base):
+        base = ""
+    start = repo.git("merge-base", base or repo.sha or "HEAD", "HEAD")[1] if (base or repo.sha) else ""
+    if start == repo.head:
+        start = repo.rev("HEAD~1")
+    before = accept_at(repo, start).get("results") if start else None
+    if not before:
+        print("基準の版に受入が無い。通す")
+        return 0
+    after = accept_at(repo, repo.head, fresh=True)
+    now = after.get("results") or {}
+    broken = [k for k, r in before.items() if r["ok"] and not (now.get(k) or {}).get("ok")]
+    for k in sorted(broken):
+        print(f"{k} {before[k]['text']} … 緑だった受入が" + ("赤になった" if k in now else "消えた"))
+    if after.get("error"):
+        print("受入を走らせられなかった: " + after["error"])
+    if broken:
+        return 1
+    print(f"緑だった受入 {sum(r['ok'] for r in before.values())} 本は緑のまま")
+    return 0
+
+
+def cmd_setup(repo):
+    here = os.path.realpath(__file__)
+    inside = here.startswith(os.path.realpath(repo.root) + os.sep)
+    rel = os.path.relpath(here, os.path.realpath(repo.root)) if inside else here
+    target = '"$(git rev-parse --show-toplevel 2>/dev/null)/' + rel + '"' if inside else '"' + rel + '"'
+    for name in HOOKS:
+        path = os.path.join(repo.root, name)
+        data = load(path) if os.path.exists(path) else {}
+        if not isinstance(data, dict):
+            print(f"{name} が読めない。手で直してからやり直す")
+            return 1
+        hooks = data.setdefault("hooks", {})
+        for event, sub in (("SessionStart", "status"), ("Stop", "check")):
+            groups = hooks.setdefault(event, [])
+            if not re.search(r"harness\W.{0,80}?\b" + sub, json.dumps(groups)):
+                cmd = f"h={target}; [ -x \"$h\" ] && exec \"$h\" {sub}; exit 0"
+                groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": TIMEOUT + 60}]})
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print("フック: " + name)
+    if "github.com" in repo.git("remote", "get-url", "origin")[1] and inside:
+        path = os.path.join(repo.root, ".github", "workflows", "accept.yml")
+        if not os.path.exists(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            branch = (repo.main or "main").replace("origin/", "", 1)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("name: accept\non:\n  pull_request:\n  push:\n    branches: [" + branch + "]\n"
+                        "permissions:\n  contents: read\n"
+                        "jobs:\n  gate:\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    steps:\n"
+                        "      - uses: actions/checkout@v7\n        with:\n          fetch-depth: 0\n"
+                        "          persist-credentials: false\n"
+                        "      - run: " + rel + ' gate "${{ github.event.pull_request.base.sha || github.event.before }}"\n')
+            print("CI: .github/workflows/accept.yml")
+    return 0
+
+
+def main(argv):
+    sub = argv[0] if argv else ""
+    if sub == "accept":
+        return cmd_accept()
+    if sub not in ("status", "check", "gate", "setup"):
+        print(__doc__.strip())
+        return 0 if sub in ("", "-h", "--help") else 2
+    repo = find_repo()
+    if not repo:
+        return 0
+    if sub == "gate":
+        return cmd_gate(repo, argv[1] if len(argv) > 1 else "")
+    if sub == "setup":
+        return cmd_setup(repo)
+    entry = read_entry(repo.root)
+    if sub == "check" and "--wellformed" in argv:
+        if not entry:
+            print("まだ整っていない\n  入口が無い（AGENTS.md に「## 進め方」と「- 正本: <ProjectのURL>」）")
+            return 1
+        return cmd_wellformed(repo, entry)
+    if not entry:
+        return 0
+    hook = hook_input()
+    if sub == "status":
+        return cmd_status(repo, entry, hook, "--fresh" in argv)
+    return cmd_check(repo, entry, hook)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(0)
