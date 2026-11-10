@@ -262,6 +262,32 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("受入  緑 0 ／ 赤 0 ／ 未実装 1", out)
 
+    def test_uncommitted_work_is_named_and_stops_the_session_that_made_it(self):
+        self.standard()
+        w = self.w
+        stop = {"hook_event_name": "Stop", "session_id": "s3"}
+        w.run("status", hook={"hook_event_name": "SessionStart", "session_id": "s3"})
+        w.write("app/main.txt", "v2 実装したが commit していない\n")
+        w.write("app/new.txt", "新しいファイル\n")
+        _, out = w.run("status")
+        self.assertIn("commit されていない変更が 2 件ある（app/main.txt、app/new.txt）", out)
+        self.assertIn("直し方は ", out)
+        verdict = json.loads(w.run("check", hook=stop)[1])
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("commit されていない変更が 2 件ある", verdict["reason"])
+        w.git("checkout", "-q", "-b", "demo-2-impl")
+        w.commit("DEMO-2 途中まで")
+        verdict = json.loads(w.run("check", hook=stop)[1])         # commit したら、次は Linear が動いていないことを言う
+        self.assertIn("DEMO-2 ブランチ demo-2-impl（main より 1 先）があるのに Todo のまま", verdict["reason"])
+        self.assertNotIn("commit されていない", verdict["reason"])
+
+    def test_work_left_uncommitted_before_the_session_does_not_stop_it(self):
+        self.standard()
+        w = self.w
+        w.write("notes.txt", "前からある\n")
+        w.run("status", hook={"hook_event_name": "SessionStart", "session_id": "s4"})
+        self.assertEqual(w.run("check", hook={"hook_event_name": "Stop", "session_id": "s4"}), (0, ""))
+
     def test_merge_gate_refuses_green_to_red(self):
         self.standard()
         w = self.w
