@@ -30,14 +30,14 @@ HOOKS = (".claude/settings.json", ".codex/hooks.json")
 
 
 def git(*args, cwd=None):
-    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, errors="replace")
     return p.returncode, p.stdout.strip()
 
 
 def sh(cmd, cwd, timeout, stdin=None, env=None):
     try:
         p = subprocess.run(cmd, shell=True, cwd=cwd, input=stdin, capture_output=True,
-                           text=True, timeout=timeout, env=env)
+                           text=True, errors="replace", timeout=timeout, env=env)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         return None, "", f"{timeout} 秒で終わらなかった"
