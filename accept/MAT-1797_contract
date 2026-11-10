@@ -1,0 +1,9 @@
+#!/bin/sh
+# harness を引数なしで走らせると、入口・Issueの受入・受入ファイルの形と、check --wellformed が見るものが出る（中身を読まずに建てられる）
+out=$(skills/linear-workflow/harness) || exit 1
+[ "$(printf '%s\n' "$out" | wc -l)" -le 45 ] || { echo "使い方が45行を超えている"; exit 1; }
+for needle in '## 進め方' '- 正本:' '- Linearの叩き方:' '- 受入:' '- モジュール:' '- 確認が要る:' \
+  '受入（自動）:' '@<commit>' '受入（証拠）:' '受入（人）:' 'accept/<Issue ID>_' '緑 <Issue ID>' 'check --wellformed が見るもの'; do
+  printf '%s\n' "$out" | grep -qF -- "$needle" || { echo "使い方に無い: $needle"; exit 1; }
+done
+grep -qF '引数なし' skills/linear-workflow/SKILL.md || { echo "SKILL.md が、形の正確な定義の出し方を言っていない"; exit 1; }
