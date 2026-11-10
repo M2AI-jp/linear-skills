@@ -38,8 +38,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -104,10 +106,40 @@ class Repo:
     def __init__(self, root):
         self.root = root
         common = git("rev-parse", "--git-common-dir", cwd=root)[1]
-        self.store = os.path.join(os.path.normpath(os.path.join(root, common)), "harness")
+        self.inside = os.path.join(os.path.normpath(os.path.join(root, common)), "harness")
+        self.outside = os.path.join(tempfile.gettempdir(), "harness-" + hashlib.sha256(
+            os.path.realpath(root).encode()).hexdigest()[:16])
+        self._store = None
         self.main = self._main()
         self.sha = self.rev(self.main) if self.main else ""
         self.head = self.rev("HEAD")
+
+    @property
+    def store(self):
+        """置き場。.git の中に書けるならそこ。書けない場所（Codex のサンドボックス）では、一時フォルダ。"""
+        if self._store is None:
+            try:
+                os.makedirs(self.inside, exist_ok=True)
+                probe = os.path.join(self.inside, f".probe-{os.getpid()}")
+                with open(probe, "w"):
+                    pass
+                os.remove(probe)
+                self._store = self.inside
+            except OSError:
+                os.makedirs(self.outside, exist_ok=True)
+                self._store = self.outside
+        return self._store
+
+    def sessions(self):
+        """フックのあるセッションが残した記録。どちらの置き場にあっても読む。"""
+        found = []
+        for home in (self.inside, self.outside):
+            folder = os.path.join(home, "session")
+            for name in (os.listdir(folder) if os.path.isdir(folder) else []):
+                state = load(os.path.join(folder, name))
+                if isinstance(state, dict):
+                    found.append(state.get("started") or os.path.getmtime(os.path.join(folder, name)))
+        return found
 
     def rev(self, ref):
         return git("rev-parse", "--verify", "-q", ref + "^{commit}", cwd=self.root)[1]
@@ -162,7 +194,7 @@ def linear(entry, query, variables):
 
 PROJECT_Q = "query($id:String!){project(id:$id){id name status{type name} projectMilestones{nodes{name}}}}"
 ISSUES_Q = """query($id:ID!,$after:String){issues(filter:{project:{id:{eq:$id}}},includeArchived:true,first:100,after:$after){
-nodes{identifier title description archivedAt state{name type} projectMilestone{name}
+nodes{identifier title description archivedAt completedAt state{name type} projectMilestone{name}
 inverseRelations(first:30){nodes{type issue{identifier state{type}}}}}
 pageInfo{hasNextPage endCursor}}}"""
 
@@ -181,7 +213,7 @@ def fetch(entry):
             decl = DECL.search(n.get("description") or "")
             issues.append({
                 "id": n["identifier"], "title": n["title"], "state": n["state"]["name"],
-                "type": n["state"]["type"], "archived": bool(n.get("archivedAt")),
+                "type": n["state"]["type"], "archived": bool(n.get("archivedAt")), "done_at": n.get("completedAt"),
                 "milestone": (n.get("projectMilestone") or {}).get("name"),
                 "kind": decl.group(1) if decl else None, "decl": decl.group(2) if decl else "",
                 "waits": sorted(r["issue"]["identifier"] for r in n["inverseRelations"]["nodes"]
@@ -199,14 +231,20 @@ def fetch(entry):
 # ---- 受入 ----
 
 def parse_lines(out):
-    results = {}
+    """「緑／赤 Issue ID 説明」の行を拾う。赤い行のすぐ下の字下げされた行は、その受入が出した末尾として持つ。"""
+    results, last = {}, None
     for line in out.splitlines():
         m = LINE.match(line)
         if m:
             ok = m.group(1).lower() in ("緑", "green")
             old = results.get(m.group(2))
-            results[m.group(2)] = {"ok": ok and (old["ok"] if old else True),
-                                   "text": (old or {}).get("text") or m.group(3).strip()}
+            last = results[m.group(2)] = {"ok": ok and (old["ok"] if old else True),
+                                          "text": (old or {}).get("text") or m.group(3).strip(),
+                                          "tail": (old or {}).get("tail", [])}
+        elif last is not None and not last["ok"] and line.startswith("    ") and len(last["tail"]) < 15:
+            last["tail"].append(line.strip()[:300])
+        else:
+            last = None
     return results
 
 
@@ -224,12 +262,16 @@ def accept_at(repo, sha, fresh=False):
     if not cmd:
         return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い"}
     tree = os.path.join(repo.store, "tree")
-    repo.git("worktree", "prune")
-    if os.path.isdir(tree):
-        rc, _ = git("checkout", "--force", "--detach", sha, cwd=tree)
-    else:
-        os.makedirs(repo.store, exist_ok=True)
-        rc, _ = repo.git("worktree", "add", "--force", "--detach", tree, sha)
+    if os.path.isfile(os.path.join(tree, ".git")):          # 前の版が置いた git worktree。登録ごと片づける
+        repo.git("worktree", "remove", "--force", tree)
+        shutil.rmtree(tree, ignore_errors=True)
+        repo.git("worktree", "prune")
+    rc = 0
+    if not os.path.isdir(os.path.join(tree, ".git")):
+        shutil.rmtree(tree, ignore_errors=True)
+        rc, _ = git("clone", "-q", "--shared", "--no-checkout", repo.root, tree)
+    if rc == 0:
+        rc, _ = git("checkout", "-q", "--force", "--detach", sha, cwd=tree)
     if rc != 0:
         return {"error": "受入を走らせる場所を用意できなかった"}
     rc, out, err = sh(cmd, tree, TIMEOUT, env={**os.environ, "HARNESS_ROOT": repo.root})
@@ -316,6 +358,7 @@ def derive(repo, entry, fresh=False):
                   "（Issue本文に「受入（自動）: 観測できる結果 パス@commit」。コードで確かめられないなら（証拠）か（人））")
         elif kind == "自動":
             found = ANCHOR.findall(i["decl"])
+            i["anchors"] = [(path.rstrip("/"), sha) for path, sha in found]
             if not found and live and t not in ("triage", "backlog"):
                 P("noanchor:" + ident, f"{ident} 受入（自動）に所在（パス@commit）が無い")
             for path, sha in found:
@@ -486,12 +529,54 @@ def save(path, data):
         json.dump(data, f, ensure_ascii=False)
 
 
+def baseline(repo, d):
+    """セッションの開始時に覚えておくもの。止めるのは、ここに無かった食い違いだけ。"""
+    return {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}, "started": time.time(), "head": repo.head,
+            "reviews_done": [i["id"] for i in d["issues"] if i["kind"] == "見直し" and i["type"] == "completed"]}
+
+
+def self_reviews(repo, d, state):
+    """このセッションが書いた受入の見直しを、このセッションが閉じていないか。"""
+    start, out = state.get("head"), []
+    if not start:
+        return out
+    for r in d["issues"]:
+        if r["kind"] != "見直し" or r["type"] != "completed" or r["id"] in state.get("reviews_done", []):
+            continue
+        mine = [x["id"] for x in d["issues"] if x["kind"] == "自動" and r["id"] in x["waited"]
+                and any(repo.git("cat-file", "-e", f"{start}:{path}")[0] != 0 for path, _ in x.get("anchors", []))]
+        if mine:
+            out.append(("selfreview:" + r["id"], f"{r['id']} 受入を書いたセッションが、その見直しを閉じている（{'、'.join(mine)}）。"
+                        "見直しを開き直して、別のセッションに任せる"))
+    return out
+
+
+def built_reviews(repo, d):
+    """建てたセッションが、自分で見直しを閉じて終えていないか。建て終わりの判定だけが見る。"""
+    out, sessions = [], repo.sessions()
+    for r in d["issues"]:
+        if r["kind"] != "見直し" or r["type"] != "completed":
+            continue
+        waiting = [x for x in d["issues"] if x["kind"] == "自動" and r["id"] in x["waited"]]
+        times = [int(t) for x in waiting for _, sha in x.get("anchors", [])
+                 for t in [repo.git("show", "-s", "--format=%ct", sha)[1]] if t.isdigit()]
+        if not waiting or not times or any(x["type"] != "unstarted" for x in waiting):
+            continue                                        # もう着手している。建て終わりの話ではない
+        try:
+            closed = time.mktime(time.strptime((r.get("done_at") or "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+        except ValueError:
+            closed = time.time()
+        if not any(max(times) < started <= closed for started in sessions):   # 受入が置かれてから閉じるまでに始まったセッションが無い
+            out.append(f"{r['id']} 受入の見直しが、建てたセッションのうちに閉じている。開き直して、次のセッションに任せる")
+    return out
+
+
 def cmd_status(repo, entry, hook, fresh):
     d = derive(repo, entry, fresh)
     text = render(repo, entry, d)
     path = session_file(repo, hook)
     if path and not os.path.exists(path) and not d["linear"]:
-        save(path, {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}})
+        save(path, baseline(repo, d))
         folder = os.path.dirname(path)
         for name in os.listdir(folder):
             if time.time() - os.path.getmtime(os.path.join(folder, name)) > 14 * 86400:
@@ -518,8 +603,10 @@ def cmd_check(repo, entry, hook):
     path = session_file(repo, hook)
     state = (load(path) if path else None)
     if path and state is None:
-        save(path, {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}})
+        save(path, baseline(repo, d))
         return 0
+    if state:
+        d["problems"] += self_reviews(repo, d, state)
     known = set(state["keys"]) if state else set()
     new = [(k, t) for k, t in d["problems"] if k not in known]
     if not new:
@@ -553,6 +640,8 @@ def cmd_wellformed(repo, entry):
     faults += [text for _, text in d["problems"]]
     if d["issues"] is not None and not d["front"] and not d["waiting"]:
         faults.append("前線が無い（受入を持つ、開いているIssueが無い）")
+    if d["issues"] is not None:
+        faults += built_reviews(repo, d)
     registered = ""
     for name in HOOKS:
         try:
@@ -600,6 +689,12 @@ def cmd_gate(repo, base):
         print(f"{k} {before[k]['text']} … 緑だった受入が" + ("赤になった" if k in now else "消えた"))
     if after.get("error"):
         print("受入を走らせられなかった: " + after["error"])
+    red = sorted(k for k, r in now.items() if not r["ok"])
+    print(f"この版の受入  緑 {len(now) - len(red)} ／ 赤 {len(red)}" + ("（" + "、".join(red) + "）" if red else ""))
+    for k in red:
+        print(f"  赤 {k} {now[k]['text']}")
+        for line in now[k].get("tail", []):
+            print("      " + line)
     if broken:
         return 1
     print(f"緑だった受入 {sum(r['ok'] for r in before.values())} 本は緑のまま")
@@ -632,6 +727,7 @@ def cmd_setup(repo):
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.write("\n")
         print("フック: " + name)
+    print("Codex では、このリポジトリを信頼し、フックを確認する操作が初回に要る。済むまで、Codex はフックを黙って走らせない")
     if "github.com" in repo.git("remote", "get-url", "origin")[1] and inside:
         path = os.path.join(repo.root, ".github", "workflows", "accept.yml")
         if not os.path.exists(path):

@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -28,7 +29,7 @@ class SandboxTest(unittest.TestCase):
     def setUp(self):
         self.w = base.World()
         self.addCleanup(self.w.close)
-        base.HarnessTest.standard(self)
+        _, self.issues = base.HarnessTest.standard(self)
         self.git = os.path.join(self.w.repo, ".git")
 
     def lock(self):
@@ -80,6 +81,7 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(self.files(), before)
 
     def test_build_check_passes_when_git_dir_is_locked(self):
+        base.HarnessTest.just_built(self, self.issues)
         self.w.run("setup")
         self.w.commit("フックを登録する")
         self.lock()
@@ -107,17 +109,26 @@ class SandboxTest(unittest.TestCase):
     def test_inside_the_real_codex_sandbox(self):
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home, True)
+
+        def sandboxed(*command):
+            return subprocess.run(["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", *command],
+                                  cwd=os.path.realpath(self.w.repo), capture_output=True, text=True, timeout=180,
+                                  stdin=subprocess.DEVNULL, env={**base.ENV, "CODEX_HOME": home})
+
+        # サンドボックス自体が立たない環境がある（GitHub の Linux ランナーは bwrap が loopback を作れない）。
+        # 飛ばしてよいのは、その既知の失敗だけ。macOS では飛ばさない。飛ばしたら「見ていない」であって「通った」ではない。
+        probe = sandboxed("/bin/sh", "-c", "exit 0")
+        if probe.returncode != 0:
+            known = "bwrap:" in probe.stderr and ("RTM_NEWADDR" in probe.stderr or "Operation not permitted" in probe.stderr)
+            if sys.platform == "darwin" or not known:
+                self.fail("Codex のサンドボックスが立たない: " + probe.stderr[-400:])
+            self.skipTest("この環境では Codex のサンドボックスが立たない: " + probe.stderr.strip()[-200:])
         before = self.files()
         for args in (["status"], ["check"]):
-            p = subprocess.run(["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", base.HARNESS, *args],
-                               cwd=os.path.realpath(self.w.repo), capture_output=True, text=True, timeout=180,
-                               stdin=subprocess.DEVNULL, env={**base.ENV, "CODEX_HOME": home})
+            p = sandboxed(base.HARNESS, *args)
             self.assertEqual(p.returncode, 0, p.stderr[-600:])
         self.assertEqual(self.files(), before)
-        p = subprocess.run(["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", base.HARNESS, "status"],
-                           cwd=os.path.realpath(self.w.repo), capture_output=True, text=True, timeout=180,
-                           stdin=subprocess.DEVNULL, env={**base.ENV, "CODEX_HOME": home})
-        self.assertIn(COUNTS, p.stdout)
+        self.assertIn(COUNTS, sandboxed(base.HARNESS, "status").stdout)
 
 
 if __name__ == "__main__":

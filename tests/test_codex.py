@@ -78,6 +78,7 @@ class CodexEngineTest(unittest.TestCase):
 
         self.server = HTTPServer(("127.0.0.1", 0), Scripted)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, True)
