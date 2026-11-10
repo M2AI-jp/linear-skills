@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "h=\"$(git rev-parse --show-toplevel 2>/dev/null)/skills/linear-workflow/harness\"; [ -x \"$h\" ] && exec \"$h\" status; exit 0",
+            "command": "h=\"$(git rev-parse --show-toplevel 2>/dev/null)/skills/linear-workflow/harness\"; [ -x \"$h\" ] && exec \"$h\" status --hook; exit 0",
             "timeout": 300
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "h=\"$(git rev-parse --show-toplevel 2>/dev/null)/skills/linear-workflow/harness\"; [ -x \"$h\" ] && exec \"$h\" check; exit 0",
+            "command": "h=\"$(git rev-parse --show-toplevel 2>/dev/null)/skills/linear-workflow/harness\"; [ -x \"$h\" ] && exec \"$h\" check --hook; exit 0",
             "timeout": 300
           }
         ]

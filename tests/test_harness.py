@@ -84,8 +84,18 @@ class World:
                                    "projectMilestones": {"nodes": [{"name": "予約"}]}}}, f, ensure_ascii=False)
 
     def run(self, *args, hook=None, cwd=None):
-        p = subprocess.run([HARNESS, *args], cwd=cwd or self.repo, capture_output=True, text=True, env=ENV,
-                           input=json.dumps(hook) if hook else "")
+        # フックは --hook を付けて、標準入力にJSONを渡す。手で走らせるときは標準入力を閉じない（読まれないこと）
+        if hook:
+            p = subprocess.run([HARNESS, *args, "--hook"], cwd=cwd or self.repo, capture_output=True, text=True,
+                               env=ENV, input=json.dumps(hook))
+        else:
+            reader, writer = os.pipe()
+            try:
+                p = subprocess.run([HARNESS, *args], cwd=cwd or self.repo, capture_output=True, text=True,
+                                   env=ENV, stdin=reader, timeout=120)
+            finally:
+                os.close(reader)
+                os.close(writer)
         return p.returncode, p.stdout.strip()
 
     def auto(self, ident, sha):
@@ -243,6 +253,15 @@ class HarnessTest(unittest.TestCase):
         w.linear(issues)
         self.assertEqual(w.run("check", hook=stop), (0, ""))       # 書き戻したら黙って通す
 
+    def test_acceptance_printing_broken_bytes_does_not_crash_the_runner(self):
+        w = self.w
+        w.write("accept/DEMO-1_check", "#!/bin/sh\n# 壊れたバイト列を出して落ちる\nprintf '\\343\\201 broken\\n'; exit 1\n", True)
+        sha = w.commit("受入")
+        w.linear([issue("DEMO-1", "unstarted", w.auto("DEMO-1", sha))])
+        rc, out = w.run("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("受入  緑 0 ／ 赤 0 ／ 未実装 1", out)
+
     def test_merge_gate_refuses_green_to_red(self):
         self.standard()
         w = self.w
@@ -271,8 +290,12 @@ class HarnessTest(unittest.TestCase):
         self.assertIn("フックに harness status が登録されていない", out)
         w.write(".claude/settings.json", json.dumps({"permissions": {"deny": ["Bash(rm *)"]}}))
         self.assertEqual(w.run("setup")[0], 0)
-        self.assertEqual(w.run("setup")[0], 0)
+        old = w.json(".claude/settings.json")
+        old["hooks"]["Stop"][0]["hooks"][0]["command"] = "x/harness check"      # 前の版が登録した形
+        w.write(".claude/settings.json", json.dumps(old))
+        self.assertEqual(w.run("setup")[0], 0)                                  # 足さずに、書き換える
         settings = w.json(".claude/settings.json")
+        self.assertIn("check --hook", settings["hooks"]["Stop"][0]["hooks"][0]["command"])
         self.assertEqual(settings["permissions"], {"deny": ["Bash(rm *)"]})
         self.assertEqual(len(settings["hooks"]["SessionStart"]), 1)
         self.assertEqual(len(settings["hooks"]["Stop"]), 1)
@@ -291,6 +314,7 @@ class HarnessTest(unittest.TestCase):
                            input=json.dumps({"hook_event_name": "SessionStart", "session_id": "s2"}))
         self.assertEqual(p.returncode, 0)
         self.assertIn("additionalContext", p.stdout)
+        self.assertIn("--hook", command)
         p = subprocess.run(command.replace("harness", "missing"), shell=True, cwd=w.repo, capture_output=True, text=True, env=ENV)
         self.assertEqual((p.returncode, p.stdout), (0, ""))
 
