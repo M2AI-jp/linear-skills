@@ -28,7 +28,7 @@ class SandboxTest(unittest.TestCase):
     def setUp(self):
         self.w = base.World()
         self.addCleanup(self.w.close)
-        base.HarnessTest.standard(self)
+        _, self.issues = base.HarnessTest.standard(self)
         self.git = os.path.join(self.w.repo, ".git")
 
     def lock(self):
@@ -80,6 +80,7 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(self.files(), before)
 
     def test_build_check_passes_when_git_dir_is_locked(self):
+        base.HarnessTest.just_built(self, self.issues)
         self.w.run("setup")
         self.w.commit("フックを登録する")
         self.lock()

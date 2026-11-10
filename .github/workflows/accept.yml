@@ -16,4 +16,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The Codex engine acceptance runs Codex itself against a scripted stand-in model; without the binary it is skipped.
+      - run: npm install --global @openai/codex@0.163.0
       - run: skills/linear-workflow/harness gate "${{ github.event.pull_request.base.sha || github.event.before }}"

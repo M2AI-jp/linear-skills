@@ -132,6 +132,16 @@ class HarnessTest(unittest.TestCase):
         w.linear(issues)
         return sha, issues
 
+    def just_built(self, issues):
+        """建てた直後の形にする。見直しの DEMO-0 はまだ開いていて、DEMO-2 と DEMO-3 はそれを待っている。"""
+        issues[3]["state"] = {"name": "Todo", "type": "unstarted"}
+        issues[3]["description"] = "受入（見直し）: 受入の抜け道を別の文脈が挙げて直す"
+        for waiting in issues[1:3]:
+            for node in waiting["inverseRelations"]["nodes"]:
+                if node["issue"]["identifier"] == "DEMO-0":
+                    node["issue"]["state"]["type"] = "unstarted"
+        self.w.linear(issues)
+
     def test_no_entry_means_no_output(self):
         w = World(entry=False)
         self.addCleanup(w.close)
@@ -314,7 +324,7 @@ class HarnessTest(unittest.TestCase):
         self.assertIn("緑だった受入が消えた", out)
 
     def test_wellformed_and_setup(self):
-        self.standard()
+        self.just_built(self.standard()[1])
         w = self.w
         rc, out = w.run("check", "--wellformed")
         self.assertEqual(rc, 1)
