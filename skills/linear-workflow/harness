@@ -31,7 +31,8 @@ check --wellformed が見るもの。
   Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
   自動の受入を持つ、開いているIssueは、受入（見直し）のIssueを待っている（Blocked by）
   モジュール表のディレクトリがあり、Milestone と1対1
-  フックに status と check が登録してある。GitHub の remote があれば、CIに gate がある
+  スキルを置いた側のフックに status と check が登録してある（.agents なら .codex/hooks.json、.claude なら .claude/settings.json）
+  GitHub の remote があれば、CIに gate がある。受入（人）のIssueが1本ある
   commit されていない変更が無い。前線（Blocked by の無い、開いているIssue）がある
 """
 import hashlib
@@ -46,7 +47,7 @@ import urllib.request
 
 ID = r"[A-Z][A-Z0-9]*-[0-9]+"
 LINE = re.compile(rf"^\s*(緑|赤|green|red)\s+({ID})(?![0-9])[\s:：-]*(.*)$", re.I)
-DECL = re.compile(r"受入\s*[（(]\s*(自動|証拠|人|見直し)\s*[）)]\s*[:：]?\s*(.*)")
+DECL = re.compile(r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?受入\s*[（(]\s*(自動|証拠|人|見直し)\s*[）)](?:\*\*)?\s*[:：]\s*(.*)$", re.M)
 ANCHOR = re.compile(r"([^\s`@（）()「」、]+)@([0-9a-f]{7,40})(?![0-9a-f])")
 TIMEOUT = int(os.environ.get("HARNESS_TIMEOUT", "240"))
 OPEN = ("triage", "backlog", "unstarted", "started")
@@ -664,15 +665,25 @@ def cmd_wellformed(repo, entry):
         faults.append("前線が無い（受入を持つ、開いているIssueが無い）")
     if d["issues"] is not None:
         faults += built_reviews(repo, d)
-    registered = ""
+    if d["issues"] is not None and not any(i["kind"] == "人" and i["type"] != "canceled" for i in d["issues"]):
+        faults.append("人が確かめるIssue（受入（人））が無い。仮置きにした基準か、できあがりが意図に合っているかを、人が確かめるIssueを1本立てる")
+    texts = {}
     for name in HOOKS:
         try:
             with open(os.path.join(repo.root, name), encoding="utf-8") as f:
-                registered += f.read()
+                texts[name] = f.read()
         except OSError:
-            pass
+            texts[name] = ""
+    # スキルを置いた側のフックが要る。.agents なら Codex、.claude なら Claude Code。どちらにも置いていなければ、どちらか
+    placed = [name for name, folder in ((".claude/settings.json", ".claude"), (".codex/hooks.json", ".agents"))
+              if os.path.exists(os.path.join(repo.root, folder, "skills", "linear-workflow", "SKILL.md"))]
     for sub in ("status", "check"):
-        if not re.search(r"harness\W.{0,80}?\b" + sub, registered):
+        has = {name: bool(re.search(r"harness\W.{0,80}?\b" + sub, text)) for name, text in texts.items()}
+        for name in placed:
+            if not has[name]:
+                faults.append(f"フックに harness {sub} が登録されていない（{name}）。harness setup を走らせる"
+                              + ("。Codexのサンドボックスは .codex に書けないので、サンドボックスの外で" if name.startswith(".codex") else ""))
+        if not placed and not any(has.values()):
             faults.append(f"フックに harness {sub} が登録されていない（harness setup）")
     if "github.com" in repo.git("remote", "get-url", "origin")[1]:
         flows = os.path.join(repo.root, ".github", "workflows")
@@ -728,12 +739,14 @@ def cmd_setup(repo):
     inside = here.startswith(os.path.realpath(repo.root) + os.sep)
     rel = os.path.relpath(here, os.path.realpath(repo.root)) if inside else here
     target = '"$(git rev-parse --show-toplevel 2>/dev/null)/' + rel + '"' if inside else '"' + rel + '"'
+    failed = []
     for name in HOOKS:
         path = os.path.join(repo.root, name)
         data = load(path) if os.path.exists(path) else {}
         if not isinstance(data, dict):
             print(f"{name} が読めない。手で直してからやり直す")
             return 1
+        before = json.dumps(data, sort_keys=True)
         hooks = data.setdefault("hooks", {})
         for event, sub in (("SessionStart", "status"), ("Stop", "check")):
             groups = hooks.setdefault(event, [])
@@ -744,12 +757,20 @@ def cmd_setup(repo):
                 h["command"] = cmd
             if not mine:
                 groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": TIMEOUT + 60}]})
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        if json.dumps(data, sort_keys=True) != before or not os.path.exists(path):
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+            except OSError:
+                failed.append(name)
+                print("書けなかった: " + name)
+                continue
         print("フック: " + name)
     print("Codex では、このリポジトリを信頼し、フックを確認する操作が初回に要る。済むまで、Codex はフックを黙って走らせない")
+    if failed:
+        print("ここには書けない。Codexのサンドボックスは .codex に書けないので、サンドボックスの外で harness setup をもう一度走らせる")
     if "github.com" in repo.git("remote", "get-url", "origin")[1] and inside:
         path = os.path.join(repo.root, ".github", "workflows", "accept.yml")
         if not os.path.exists(path):
@@ -763,7 +784,7 @@ def cmd_setup(repo):
                         "          persist-credentials: false\n"
                         "      - run: " + rel + ' gate "${{ github.event.pull_request.base.sha || github.event.before }}"\n')
             print("CI: .github/workflows/accept.yml")
-    return 0
+    return 1 if failed else 0
 
 
 def main(argv):

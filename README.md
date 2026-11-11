@@ -19,6 +19,8 @@
 
 Codexは、人がそのリポジトリを信頼し、フックを確認するまで、フックを走らせない（初回だけ）。信頼されていないリポジトリのフックは、読まれもしない。
 
+Codexのサンドボックスの中からは、`.codex` に書けない。既定では `.git` にも書けない。だから Codex で建てるときは、`harness setup` と commit を、人がサンドボックスの外で通す（承認する）必要がある。`harness setup` は書けなかったファイルを言い、建て終わりの判定は、スキルを置いた側のフックが登録されるまで通らない。
+
 このリポジトリの `AGENTS.md`、`DESIGN.md`、`accept/`、`tests/` は導入先へコピーしない。
 
 外すときは、置いたフォルダ、`AGENTS.md` の `## 進め方`、`.claude/settings.json` と `.codex/hooks.json` にある `harness` の登録、`.github/workflows/accept.yml` を消す。
