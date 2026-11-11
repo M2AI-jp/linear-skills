@@ -1,0 +1,4 @@
+#!/bin/sh
+# 入口の「進め方」に5項目以外の行（「現在の許可範囲は…」のような文や、余分な項目）があると現在地が名指しし、建て終わりの判定が通らない。ブロックの外の文は名指ししない
+python3 -m unittest -q tests.test_entry || exit 1
+grep -qF "この場かぎりの指示は書かない" skills/linear-workflow/SKILL.md || { echo "SKILL.md に「この場かぎりの指示は書かない」が無い"; exit 1; }
