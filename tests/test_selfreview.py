@@ -33,7 +33,8 @@ class SelfReviewTest(unittest.TestCase):
         return [issue("DEMO-1", "completed", w.auto("DEMO-1", self.first)),
                 issue("DEMO-2", target, w.auto("DEMO-2", sha), blocked_by={"DEMO-9": review}),
                 issue("DEMO-9", review, "受入（見直し）: DEMO-2 の受入の抜け道を別の文脈が挙げて直す"
-                      + (" https://example.com/r9" if done else ""), completed_at=(closed_at or iso()) if done else None)]
+                      + (" https://example.com/r9" if done else ""), completed_at=(closed_at or iso()) if done else None),
+                issue("DEMO-H", "unstarted", "受入（人）: 依頼者が、仮置きにした基準を確かめる")]
 
     def test_session_that_wrote_the_acceptance_cannot_close_its_review(self):
         w = self.w

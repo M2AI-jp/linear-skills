@@ -1,0 +1,4 @@
+#!/bin/sh
+# 受入（人）のIssueが1本も無ければ建て終わりの判定が通らず、1本あれば通る。中止したものや、人に触れているだけのIssueは数えない
+python3 -m unittest -q tests.test_human || exit 1
+grep -qF "受入（人）のIssueを1本立てる" skills/linear-workflow/SKILL.md || { echo "SKILL.md に「受入（人）のIssueを1本立てる」が無い"; exit 1; }
