@@ -8,13 +8,6 @@ import unittest
 import tests.test_harness as base
 
 NAMED = "入口の「進め方」に、5項目以外の行がある"
-ENTRY = ("## 進め方\n"
-         "- 正本: https://linear.app/demo/project/demo-0123456789ab\n"
-         "- Linearの叩き方: `{linear}`\n"
-         "- 受入: `{accept}`（出力は Issue ID ごとの緑・赤）\n"
-         "- モジュール: app = 予約\n"
-         "- 確認が要る: 本番の設定変更、送信\n")
-
 
 class EntryTest(unittest.TestCase):
     def setUp(self):
@@ -43,6 +36,22 @@ class EntryTest(unittest.TestCase):
         out = self.entry(inside="- 許可範囲: 計画と受入だけ。実装はしない\n")
         self.assertIn(NAMED, out)
         self.assertIn("許可範囲", out)
+
+    def test_a_line_that_only_looks_like_one_of_the_five_is_named(self):
+        for line in ("- 確認が要る: 本番の設定変更、送信\n",                 # 同じ項目の2本目
+                     "- 受入の範囲: 計画だけ。実装はしない\n",                 # 項目名で始まるだけ
+                     "- 確認が要る事項: 実装は次の指示を待つ\n",
+                     "* 許可範囲: 計画だけ\n",                                 # 別の印
+                     "  - 現在は実装しない\n"):                               # 項目の下の入れ子
+            with self.subTest(line=line):
+                out = self.entry(inside=line)
+                self.assertIn(NAMED, out)
+                self.assertIn(line.strip(), out)
+
+    def test_a_subheading_does_not_hide_what_follows_it(self):
+        out = self.entry(inside="\n### 今回の範囲\n\n実装はしない。\n")      # 「進め方」の子。ブロックの外ではない
+        self.assertIn(NAMED, out)
+        self.assertIn("実装はしない", out)
 
     def test_it_keeps_the_build_from_finishing(self):
         base.HarnessTest.just_built(self, self.issues)
