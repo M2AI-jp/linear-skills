@@ -133,10 +133,13 @@ class HarnessTest(unittest.TestCase):
         w.linear(issues)
         return sha, issues
 
-    def just_built(self, issues):
-        """建てた直後の形にする。見直しの DEMO-0 はまだ開いていて、DEMO-2 と DEMO-3 はそれを待っている。"""
+    def just_built(self, issues, human=True):
+        """建てた直後の形にする。見直しの DEMO-0 はまだ開いていて、DEMO-2 と DEMO-3 はそれを待っている。
+        人が確かめる DEMO-H もある（human=False なら立てない）。"""
         issues[3]["state"] = {"name": "Todo", "type": "unstarted"}
         issues[3]["description"] = "受入（見直し）: 受入の抜け道を別の文脈が挙げて直す"
+        if human and not any(i["identifier"] == "DEMO-H" for i in issues):
+            issues.append(issue("DEMO-H", "unstarted", "受入（人）: 依頼者が、仮置きにした基準を確かめる"))
         for waiting in issues[1:3]:
             for node in waiting["inverseRelations"]["nodes"]:
                 if node["issue"]["identifier"] == "DEMO-0":
