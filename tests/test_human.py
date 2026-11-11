@@ -43,6 +43,21 @@ class HumanIssueTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn(NAMED, out)
 
+    def test_an_issue_that_talks_about_the_declaration_does_not_count(self):
+        base.HarnessTest.just_built(self, self.issues, human=False)
+        self.issues.append(issue("DEMO-K", "unstarted", "この Project に受入（人）は立てない"))   # 文中に語があるだけ
+        self.w.linear(self.issues)
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 1)
+        self.assertIn(NAMED, out)
+
+    def test_one_in_backlog_counts(self):
+        base.HarnessTest.just_built(self, self.issues, human=False)
+        self.issues.append(issue("DEMO-H", "backlog", "受入（人）: 依頼者が、仮置きにした基準を確かめる"))
+        self.w.linear(self.issues)
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 0, out)
+
     def test_the_position_does_not_nag_about_it_after_the_build(self):
         self.w.linear(self.issues)                              # 進行中の形（見直しは済み、人のIssueはもう無い）
         _, out = self.w.run("status")

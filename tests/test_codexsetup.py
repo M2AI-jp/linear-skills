@@ -95,6 +95,35 @@ class CodexSetupTest(unittest.TestCase):
         rc, out = self.w.run("check", "--wellformed")
         self.assertEqual(rc, 0, out)
 
+    def test_a_hooks_file_without_harness_does_not_count(self):
+        self.place(".agents")
+        self.assertEqual(self.setup_raw().returncode, 0)
+        with open(os.path.join(self.codex, "hooks.json"), "w") as f:
+            f.write("{}\n")                                                    # ファイルがあるだけでは、登録ではない
+        self.w.commit("スキルと、中身の無いフックを置く")
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 1)
+        self.assertIn(MISSING, out)
+
+    def test_skill_placed_for_codex_does_not_need_the_claude_code_hooks(self):
+        self.place(".agents")
+        self.assertEqual(self.setup_raw().returncode, 0)
+        os.remove(os.path.join(self.w.repo, ".claude", "settings.json"))
+        self.w.commit("スキルと Codex のフックだけを置く")
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 0, out)
+
+    def test_setup_that_has_nothing_to_write_succeeds_where_it_cannot_write(self):
+        self.assertEqual(self.setup_raw().returncode, 0)                        # 人が、外で済ませた後
+        hooks = os.path.join(self.codex, "hooks.json")
+        for path, mode in ((hooks, 0o444), (self.codex, 0o555)):
+            os.chmod(path, mode)
+        self.addCleanup(os.chmod, self.codex, 0o755)
+        self.addCleanup(os.chmod, hooks, 0o644)
+        p = self.setup_raw()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("書けなかった", p.stdout)
+
     @unittest.skipUnless(shutil.which("codex"), "codex が無い環境では飛ばす")
     def test_inside_the_real_codex_sandbox(self):
         home = tempfile.mkdtemp()
