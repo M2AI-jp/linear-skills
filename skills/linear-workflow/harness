@@ -8,7 +8,7 @@
   harness accept              accept/ の下の受入を1本ずつ走らせる
   harness setup               フックとCIを登録する
 
-入口。AGENTS.md か CLAUDE.md に置く。無いリポジトリでは、何も出さずに終わる。
+入口。AGENTS.md か CLAUDE.md に置く。無いリポジトリでは、何も出さずに終わる。ブロックに書くのは、この5行だけ。
   ## 進め方
   - 正本: <Linear Project のURL>
   - Linearの叩き方: `<GraphQLのJSONを標準入力で受けて、応答のJSONを返すコマンド>`（無ければ環境変数 LINEAR_API_KEY）
@@ -75,14 +75,28 @@ def last_line(text):
 
 # ---- 入口 ----
 
+KEYS = ("正本", "Linearの叩き方", "受入", "モジュール", "確認が要る")
+
+
 def parse_entry(text):
-    m = re.search(r"^##\s*進め方\s*$(.*?)(?=^#|\Z)", text, re.M | re.S)
+    """「## 進め方」のブロックを読む。次の同じ高さ以上の見出しまでがブロック。
+    5項目（行頭の「- 項目: 値」、1本ずつ）以外の行は、_extra に集める。入口に、その場かぎりの指示を残さないため。"""
+    m = re.search(r"^##[ \t]*進め方[ \t]*$(.*?)(?=^#{1,2}[ \t]|\Z)", text, re.M | re.S)
     if not m:
         return None
-    entry = {}
-    for key, value in re.findall(r"^\s*[-*]\s*([^:：\n]+?)\s*[:：]\s*(.+)$", m.group(1), re.M):
-        entry.setdefault(key.strip(), value.strip())
-    return entry if entry.get("正本") else None
+    entry, extra = {}, []
+    for line in m.group(1).splitlines():
+        if not line.strip():
+            continue
+        item = re.match(r"^-[ \t]+([^:：]+?)[ \t]*[:：][ \t]*(.+)$", line)
+        if item and item.group(1) in KEYS and item.group(1) not in entry:
+            entry[item.group(1)] = item.group(2).strip()
+        else:
+            extra.append(line.strip())
+    if not entry.get("正本"):
+        return None
+    entry["_extra"] = extra
+    return entry
 
 
 def read_entry(root):
@@ -364,6 +378,9 @@ def derive(repo, entry, fresh=False):
         return d
     d["issues"], d["project"] = issues, project
     known = {i["id"]: i for i in issues}
+    if entry.get("_extra"):
+        P("entry", "入口の「進め方」に、5項目以外の行がある: " + " ／ ".join(entry["_extra"][:3])
+          + "。入口には、次のセッションでも成り立つことだけを書く")
     anchors = []
     for i in issues:
         ident, t, kind = i["id"], i["type"], i["kind"]
