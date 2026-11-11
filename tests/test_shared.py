@@ -64,6 +64,8 @@ class SharedTest(unittest.TestCase):
             self.assertTrue(hit, f"{ident} が名指しされていない:\n{out}")
             self.assertIn(self.sha[:7], hit[0])                       # どの版から変わったかを言う
         self.assertNotIn("食い違い  なし", out)
+        for ident in ("DEMO-0", "DEMO-H"):                           # 受入の置き場に受入を持たないIssueは、名指ししない
+            self.assertFalse(lines(out, ident, LIB), f"{ident} まで名指しされている:\n{out}")
 
     def test_rewriting_the_anchor_clears_it_for_that_issue_only(self):
         self.w.write(LIB, WEAK)
@@ -120,6 +122,22 @@ class SharedTest(unittest.TestCase):
         w = self.w
         w.git("checkout", "-q", "-b", "demo-2-impl")
         w.write(LIB, WEAK)
+        w.commit("DEMO-2 を実装")
+        out = self.status()
+        self.assertTrue(lines(out, LIB, "ブランチ"), out)
+
+    def test_a_helper_added_on_a_branch_is_named(self):
+        w = self.w
+        w.git("checkout", "-q", "-b", "demo-2-impl")
+        w.write("accept/override.sh", "# 受入が読み込めば、期待値を差し替えられる\n")
+        w.commit("DEMO-2 を実装")
+        out = self.status()
+        self.assertTrue(lines(out, "accept/override.sh", "ブランチ"), out)
+
+    def test_a_helper_removed_on_a_branch_is_named(self):
+        w = self.w
+        w.git("checkout", "-q", "-b", "demo-2-impl")
+        w.git("rm", "-q", LIB)
         w.commit("DEMO-2 を実装")
         out = self.status()
         self.assertTrue(lines(out, LIB, "ブランチ"), out)
