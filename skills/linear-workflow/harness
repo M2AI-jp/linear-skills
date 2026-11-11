@@ -18,9 +18,11 @@
 
 受入のファイル。accept/<Issue ID>_<名前>。実行できること。終了コード0が緑。最初のコメント行が説明になる。
 追跡されているファイルだけの場所（main の版）で走る。
+同じ置き場にある、Issue ID で始まらないファイル（共有の関数、データ）は、そこにある受入の一部として比べる。
 
 Issue本文の受入。1行。
   受入（自動）: <観測できる結果> <パス>@<commit>   パスは main にあり、その commit の版から変わっていないこと
+                受入が置き場の外のファイル（テストなど）を読むなら、それも <パス>@<commit> で所在に並べる
   受入（証拠）: <観測できる結果> <完了時に、リンクか commit>
   受入（人）: <誰が何を確かめるか>
   受入（見直し）: <どのIssueの受入の抜け道を、別の文脈が挙げて直すか> <完了時に、リンクか commit>
@@ -52,6 +54,7 @@ ANCHOR = re.compile(r"([^\s`@（）()「」、]+)@([0-9a-f]{7,40})(?![0-9a-f])")
 TIMEOUT = int(os.environ.get("HARNESS_TIMEOUT", "240"))
 OPEN = ("triage", "backlog", "unstarted", "started")
 HOOKS = (".claude/settings.json", ".codex/hooks.json")
+OWN = re.compile(rf"^{ID}(?![0-9])")                # 受入のファイルと、それだけが読むものは、Issue ID で始まる
 
 
 def git(*args, cwd=None):
@@ -381,7 +384,20 @@ def derive(repo, entry, fresh=False):
     if entry.get("_extra"):
         P("entry", "入口の「進め方」に、5項目以外の行がある: " + " ／ ".join(entry["_extra"][:3])
           + "。入口には、次のセッションでも成り立つことだけを書く")
-    anchors = []
+    anchors, moved = [], {}
+
+    def beside(path, sha):
+        """受入（<Issue ID>_<名前>）と同じ置き場にある、Issue ID で始まらないファイルのうち、その版から変わったもの。
+        共有の関数やデータは、そこにある受入のどれもが読みうる。書き換えれば、受入を書き換えたのと同じ。"""
+        folder, name = os.path.split(path)
+        if not folder or not OWN.match(name):
+            return []
+        if (folder, sha) not in moved:
+            names = repo.git("-c", "core.quotepath=false", "diff", "--no-renames", "--name-only", sha, repo.sha, "--", folder)[1]
+            moved[(folder, sha)] = [n for n in names.splitlines()
+                                    if not any(OWN.match(part) for part in n[len(folder) + 1:].split("/"))]
+        return moved[(folder, sha)]
+
     for i in issues:
         ident, t, kind = i["id"], i["type"], i["kind"]
         res = (results or {}).get(ident)
@@ -409,6 +425,10 @@ def derive(repo, entry, fresh=False):
                 elif repo.git("diff", "--quiet", sha, repo.sha, "--", path)[0] != 0:
                     P("changed:" + ident, f"{ident} 受入が、Issueに書いた版（{sha[:7]}）から変わった: {path}。"
                       "基準を人が変えたのなら、所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す")
+                elif beside(path, sha):
+                    P("changed:" + ident, f"{ident} 受入と同じ置き場の補助が、Issueに書いた版（{sha[:7]}）から変わった: "
+                      f"{'、'.join(beside(path, sha)[:3])}。見直しで直した・基準を人が変えたのなら、"
+                      "所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す")
             if results is not None:
                 if res is None and live and t not in ("triage", "backlog"):
                     P("noline:" + ident, f"{ident} {i['state']} だが、main の受入に出てこない"
@@ -453,13 +473,18 @@ def derive(repo, entry, fresh=False):
     # このブランチ・作業ツリーが、main にある受入を変えていないか
     base = repo.git("merge-base", "HEAD", repo.sha)[1] if repo.head and repo.sha else ""
     if base and anchors:
-        changed = repo.git("diff", "--name-status", base, "--", *sorted({p for _, p in anchors}))[1]
+        folders = {os.path.dirname(p) for _, p in anchors if os.path.dirname(p) and OWN.match(os.path.basename(p))}
+        changed = repo.git("-c", "core.quotepath=false", "diff", "--no-renames", "--name-status", base, "--",
+                           *sorted({p for _, p in anchors} | folders))[1]
         for line in changed.splitlines():
             status, _, name = line.partition("\t")
-            if status[:1] in ("M", "D", "R"):
-                for ident, path in anchors:
-                    if name == path or name.startswith(path + "/"):
-                        P("tree:" + ident, f"{ident} 受入が、このブランチ／作業ツリーで変わっている: {name}。受入は、実装した文脈では変えない")
+            mine = [ident for ident, path in anchors if name == path or name.startswith(path + "/")]
+            if mine and status[:1] in ("M", "D"):
+                for ident in mine:
+                    P("tree:" + ident, f"{ident} 受入が、このブランチ／作業ツリーで変わっている: {name}。受入は、実装した文脈では変えない")
+            elif not mine and any(name.startswith(f + "/") and not any(OWN.match(part) for part in name[len(f) + 1:].split("/"))
+                                  for f in folders):                  # 足した補助も、受入が読み込めば期待値を差し替えられる
+                P("tree:" + name, f"受入と同じ置き場の補助が、このブランチ／作業ツリーで変わっている: {name}。受入は、実装した文脈では変えない")
 
     # モジュール表
     table = {}
