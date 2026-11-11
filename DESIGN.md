@@ -196,6 +196,7 @@ LinearのGitHub連携は、Issue ID を名前に持つブランチのPRがマー
 - `Read(/path/**)` の deny はファイルツールを縛らない。信頼済みでないワークスペースでは `.claude/settings.json` の `allow` が無視される
 - Linearへの書き込みは、試行が作ったProjectの中だけに絞る入口を通す。**入口はLinearのエラー文を見せること。** 見せなかった回は、セッションが原因を探るために空のProjectを作った
 - 入口と観測者のファイルは、実行者から見える場所を分ける。同じ場所に置いた回は、実行者が入口の中身と状態ファイルを読みに行った。隣の使い捨てリポジトリ（`../`）も見える
+- 空のリポジトリから小さく建てる回だけでは、出ない欠陥がある。動いているコードのある場所で建てる回と、途中で基準を変える回を入れる（受入の補助を機構が見ていなかったことは、そこで初めて出た）
 - 合否は、セッションの報告ではなく、終わったあとの状態で決める。観測者が `harness check --wellformed`、追跡ファイルだけの場所での受入、`harness status` を走らせる
 - **Codexのフックは、実物のモデルが無くても確かめられる。** 使い捨ての `CODEX_HOME` に、台本どおりに答える手元のモデル提供元と、Projectの信頼を書く。`codex exec --ephemeral --dangerously-bypass-hook-trust` で走らせる。`~/.codex` には触らない（`tests/test_codex.py`）。Codexが認識しているフックは、`codex app-server` の `hooks/list` で見られる。Projectが信頼済みでないと、Projectのフックは一覧にも出ない
 - Codexのサンドボックスは、`codex sandbox -c 'sandbox_mode="workspace-write"' -- <コマンド>` で、モデルなしに再現できる。`.git` と `.codex` に書けず、ネットワークとキーチェーンに届かない。フックはサンドボックスの外で動く。`.git` を writable_roots に足せば commit できる（人が commit を承認したのと同じ条件）。ネットワークを開けると、キーチェーンにも届くようになる
