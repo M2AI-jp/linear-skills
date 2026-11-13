@@ -124,6 +124,15 @@ class BuiltBySessionTest(unittest.TestCase):
         self.assertIn("現在地（導出", json.loads(out)["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.w.run("check", hook={"hook_event_name": "Stop", "session_id": "s2"}), (0, ""))
 
+    def test_an_entry_present_at_start_is_not_judged_as_a_build(self):
+        build(self, human=False)
+        self.w.run("status", hook=self.start)
+        self.assertEqual(self.w.run("check", hook=self.stop), (0, ""))
+        self.w.write("app/new.txt", "commit していない\n")
+        held = self.verdict()
+        self.assertEqual(held.get("decision"), "block", held)
+        self.assertNotIn(NOT_YET, held["reason"])
+
     def test_a_session_whose_start_was_not_seen_is_not_judged_as_a_build(self):
         build(self, human=False)                                            # 開始のフックが走らなかった。建てたかどうかは分からない
         self.assertEqual(self.w.run("check", hook=self.stop), (0, ""))

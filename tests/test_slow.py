@@ -69,7 +69,9 @@ class SlowAcceptanceTest(unittest.TestCase):
             return sorted(f.read().split())
 
     def test_a_hook_stops_waiting_and_the_run_goes_on_to_be_used_next_time(self):
+        started = time.monotonic()
         first = self.context()
+        self.assertLess(time.monotonic() - started, 5, "フックが全6秒の受入を待っている")
         self.assertIn(GOING, first)
         self.assertNotIn(COUNTS, first)
         self.assertIn("前線  DEMO-2 題 DEMO-2（Todo）", first)                # Linearから分かることは、待たずに出す
@@ -93,6 +95,27 @@ class SlowAcceptanceTest(unittest.TestCase):
         rc, out = self.w.run("gate", "main", env=self.env)
         self.assertEqual(rc, 0, out)
         self.assertIn("緑だった受入 1 本は緑のまま", out)
+
+    def test_the_merge_gate_waits_and_refuses_a_slow_regression(self):
+        self.w.run("status", env=self.env)
+        self.w.git("checkout", "-q", "-b", "work")
+        self.slow("DEMO-1", False)
+        self.w.commit("緑だった受入を壊す")
+        rc, out = self.w.run("gate", "main", env=self.env)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("DEMO-1", out)
+        self.assertIn("緑だった受入が赤になった", out)
+
+    def test_a_failed_background_command_is_remembered_without_restarting(self):
+        with open(os.path.join(self.w.repo, "AGENTS.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.w.write("fail.sh", '#!/bin/sh\necho run >> "$RUNS"\nsleep 4\nexit 3\n', True)
+        self.w.write("AGENTS.md", re.sub(r"(?m)^- 受入: .*$", "- 受入: `./fail.sh`", text))
+        self.w.commit("行を出さずに失敗する遅いコマンド")
+        self.assertIn(GOING, self.context())
+        self.until(lambda: "受入  走らせられなかった" in self.context())
+        self.assertIn("受入  走らせられなかった", self.context())
+        self.assertEqual(self.ran(), ["run"])
 
     def test_what_could_not_be_seen_at_the_start_does_not_hold_the_session(self):
         self.issues[1]["state"] = {"name": "Done", "type": "completed"}       # 前からある食い違い: DEMO-2 は Done だが、受入は赤い
