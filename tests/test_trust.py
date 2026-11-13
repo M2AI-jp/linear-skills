@@ -41,10 +41,18 @@ class TrustTest(unittest.TestCase):
         git = os.path.join(self.w.repo, ".git")
         chmod_tree(git, False)
         self.addCleanup(chmod_tree, git, True)
+        with self.assertRaises(OSError):
+            open(os.path.join(git, "probe"), "w").close()
 
     def test_a_planted_result_is_not_used_where_git_is_writable(self):
         self.plant()
         _, out = self.w.run("status", env=self.env)
+        self.assertIn(COUNTS, out)
+        self.assertNotIn(FORGED, out)
+
+    def test_a_planted_tmpdir_result_is_not_used_without_harness_store(self):
+        self.plant()
+        _, out = self.w.run("status", env={"TMPDIR": self.outside, "HARNESS_STORE": ""})
         self.assertIn(COUNTS, out)
         self.assertNotIn(FORGED, out)
 
