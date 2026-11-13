@@ -1,0 +1,3 @@
+#!/bin/sh
+# 開始時に未 commit があっても、このセッションが足した未 commit は名指しされて止まる。数字だけの並びは、証拠に数えない。字下げした行は、受入の結果の行として読まない
+python3 -m unittest -q tests.test_strict || exit 1

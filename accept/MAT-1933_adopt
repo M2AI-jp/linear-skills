@@ -1,0 +1,6 @@
+#!/bin/sh
+# harness setup は、GitHub に remote があれば CI の門を作り、その検査を main の必須チェックにすることを人に言う。README と SKILL.md もそれを言う。SKILL.md は、受入だけの commit のメッセージにも Issue ID を入れないことを言う
+python3 -m unittest -q tests.test_adopt || exit 1
+grep -qF "必須チェック" README.md || { echo "README が、統合の門を main の必須チェックにすることを言っていない"; exit 1; }
+grep -qF "必須チェック" skills/linear-workflow/SKILL.md || { echo "SKILL.md が、統合の門を main の必須チェックにすることを言っていない"; exit 1; }
+grep -qF "commit のメッセージ" skills/linear-workflow/SKILL.md || { echo "SKILL.md が、受入だけの commit のメッセージに Issue ID を入れないことを言っていない"; exit 1; }
