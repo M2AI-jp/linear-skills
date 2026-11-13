@@ -5,7 +5,9 @@
 3. 受入の結果の行は、行の頭から始まる。落ちた受入の出力の末尾（字下げして出す）の中の行は、結果ではない。
 """
 import json
+import hashlib
 import os
+import subprocess
 import unittest
 
 import tests.test_harness as base
@@ -53,6 +55,27 @@ class OwnUncommittedTest(unittest.TestCase):
         _, out = self.w.run("status")
         self.assertIn("commit されていない変更が 1 件ある（app/theirs.txt）", out)
 
+    def test_modifying_an_already_dirty_path_does_not_block(self):
+        self.w.write("app/main.txt", "開始前の変更\n")
+        self.w.run("status", hook=START)
+        self.w.write("app/main.txt", "開始後の追記もパス単位では区別しない\n")
+        self.assertEqual(self.w.run("check", hook=STOP), (0, ""))
+
+    def test_a_tracked_deletion_is_new_work_even_if_another_path_was_dirty(self):
+        self.w.write("notes/theirs.txt", "前からある\n")
+        self.w.run("status", hook=START)
+        os.remove(os.path.join(self.w.repo, "app", "main.txt"))
+        held = self.verdict()
+        self.assertEqual(held.get("decision"), "block", held)
+        self.assertIn("app/main.txt", held["reason"])
+        self.assertNotIn("notes/theirs.txt", held["reason"])
+
+    def test_status_counts_untracked_files_separately(self):
+        self.w.write("notes/one.txt", "1\n")
+        self.w.write("notes/two.txt", "2\n")
+        _, out = self.w.run("status")
+        self.assertIn("commit されていない変更が 2 件ある", out)
+
 
 class EvidenceTest(unittest.TestCase):
     def setUp(self):
@@ -75,6 +98,29 @@ class EvidenceTest(unittest.TestCase):
         self.assertFalse(self.named("受入（証拠）: 見積を送り、受領の返信がある https://example.com/mail/1 2026-11-13"))
         self.assertFalse(self.named(f"受入（見直し）: 受入の抜け道を挙げて直した commit {self.sha[:9]}"))
         self.assertFalse(self.named(f"受入（見直し）: 受入の抜け道を挙げて直した {self.sha}"))
+
+    def test_hex_evidence_has_the_declared_length_bounds(self):
+        for token, missing in (("abcdef", True), ("abcdef1", False),
+                               ("a" * 40, False), ("a" * 41, True)):
+            with self.subTest(token=token):
+                self.assertEqual(self.named(f"受入（証拠）: 確認した {token}"), missing)
+
+    def test_a_numeric_prefix_resolving_to_a_real_commit_is_evidence(self):
+        # 日付を一律に拒否すると、数字だけで始まる実在commitも失う。
+        tree = self.w.git("rev-parse", "HEAD^{tree}")
+        for n in range(10000):
+            body = (f"tree {tree}\nauthor t <t@example.com> 1 +0000\n"
+                    f"committer t <t@example.com> 1 +0000\n\nevidence {n}\n").encode()
+            sha = hashlib.sha1(b"commit " + str(len(body)).encode() + b"\0" + body).hexdigest()
+            if sha[:7].isdigit():
+                break
+        else:
+            self.fail("数字7桁で始まるcommitを作れない")
+        p = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                           cwd=self.w.repo, env=base.ENV, input=body, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.decode().strip(), sha)
+        self.assertFalse(self.named(f"受入（証拠）: 確認した {sha[:7]}"))
 
 
 class ResultLineTest(unittest.TestCase):
