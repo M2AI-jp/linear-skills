@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import tests.test_harness as base
 
@@ -29,6 +30,12 @@ class SandboxTest(unittest.TestCase):
     def setUp(self):
         self.w = base.World()
         self.addCleanup(self.w.close)
+        # .git に書けないとき、置き場は TMPDIR に落ちる。共用の一時フォルダに残さないよう、この試験の中に向ける。
+        tmp = os.path.join(self.w.dir, "tmp")
+        os.makedirs(tmp)
+        environment = patch.dict(base.ENV, {"TMPDIR": tmp})
+        environment.start()
+        self.addCleanup(environment.stop)
         _, self.issues = base.HarnessTest.standard(self)
         self.git = os.path.join(self.w.repo, ".git")
 
