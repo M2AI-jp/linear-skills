@@ -3,13 +3,11 @@
 
   harness status              現在地を出す（セッション開始のフックが --hook を付けて呼ぶ）
   harness check               このセッションで生じた食い違いが残っていれば止める（停止のフックが --hook を付けて呼ぶ）
+                              入口の無いところから建てたセッションは、建て終わりの判定が通るまで止める（同じ理由は2回まで）
   harness check --wellformed  建て終わったかを判定する
   harness gate [BASE]         緑だった受入を赤にする変更を通さない（CIが呼ぶ）
   harness accept              accept/ の下の受入を1本ずつ走らせる
   harness setup               フックとCIを登録する
-
-入口が無いときに開始のフックが走ったセッションは、入口を建てたあと停止のフックも建て終わりを判定する。
-建て終わりの判定が通るまで、同じ理由で2回まで止める。通ればふつうのセッションになる。
 
 入口。AGENTS.md か CLAUDE.md に置く。無いリポジトリでは、何も出さずに終わる。ブロックに書くのは、この5行だけ。
   ## 進め方
@@ -20,9 +18,9 @@
   - 確認が要る: <取り消しにくい操作>
 
 受入のファイル。accept/<Issue ID>_<名前>。実行できること。終了コード0が緑。最初のコメント行が説明になる。
-追跡ファイルだけの場所で切り離して走る。3600秒で子プロセスごと止め、版ごとの結果を再利用する。
-フックは HARNESS_TIMEOUT 秒（既定240）待ち、途中なら走らせ続けて戻る。手動と gate は最後まで待つ。
-main が動けば古い実行を子プロセスごと止める。accept の1本ごとの上限も HARNESS_TIMEOUT 秒。
+追跡されているファイルだけの場所（main の版）で走る。結果は、版ごとに覚える。
+フックは HARNESS_TIMEOUT 秒（既定 240）だけ待つ。終わらなければ走らせ続け、終わった結果を次の呼び出しが使う。
+手で走らせたときと gate は、終わるまで待つ。1本ごとの上限も HARNESS_TIMEOUT 秒。
 同じ置き場にある、Issue ID で始まらないファイル（共有の関数、データ）は、そこにある受入の一部として比べる。
 
 Issue本文の受入。1行。
@@ -33,7 +31,7 @@ Issue本文の受入。1行。
   受入（見直し）: <どのIssueの受入の抜け道を、別の文脈が挙げて直すか> <完了時に、リンクか commit>
 
 check --wellformed が見るもの。
-  入口の5行がある。受入コマンドが main の版で走る（自動が無ければ終了コード0なら行は出なくてよい）。Linearに届き、正本のProjectが引ける
+  入口の5行がある。受入コマンドが main の版で走る（自動の受入が1本も無ければ、行は出なくてよい）。Linearに届き、正本のProjectが引ける
   Todo・In Progress・Done のIssueに受入がある。自動なら所在があり、main の出力に行がある
   Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
   自動の受入を持つ、開いているIssueは、受入（見直し）のIssueを待っている（Blocked by）
@@ -665,7 +663,7 @@ def derive(repo, entry, fresh=False, wait=None):
 
 def linear_hint(message):
     if any(k in os.environ for k in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")):
-        message += "。サンドボックス内からは通常届かない。手動ではサンドボックスの外で走らせる。フックは外でLinearを読んで判定する"
+        message += "。Codexのサンドボックスの中からは、ふつう届かない（故障ではない）。確かめるなら、サンドボックスの外で走らせる。フックは外で動くので、現在地と停止の門には届いている"
     return message
 
 
@@ -677,7 +675,7 @@ def render(repo, entry, d):
         out.append(f"いま  {name}@{repo.head[:7]}（main より {ahead} 先）")
     results, known = d["results"], {i["id"]: i for i in d["issues"] or []}
     if d.get("accept_pending"):
-        out.append("受入  走らせ続けている")
+        out.append(f"受入  走らせ続けている（{TIMEOUT} 秒では終わらなかった。終わった結果は、次の呼び出しが使う）")
     elif results is None:
         out.append("受入  走らせられなかった: " + d["accept_error"])
     elif d["issues"] is None:
@@ -772,7 +770,10 @@ def result_problem(issue, results):
 def baseline(repo, d):
     """セッションの開始時に覚えておくもの。止めるのは、ここに無かった食い違いだけ。"""
     return {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}, "started": time.time(), "head": repo.head, "accept_sha": repo.sha,
-            "accept_unknown": d["results"] is None, "accept_start": [{"id": i["id"], "type": i["type"], "kind": i["kind"], "archived": i["archived"]} for i in d["issues"]],
+            # 受入の結果がまだ無いときだけ、あとで突き合わせるために、Issueの状態を覚えておく
+            "accept_unknown": d["results"] is None,
+            "accept_start": [{"id": i["id"], "type": i["type"], "kind": i["kind"], "archived": i["archived"]}
+                             for i in d["issues"]] if d["results"] is None else [],
             "project_start": d["project"]["status"],
             "reviews_done": [i["id"] for i in d["issues"] if i["kind"] == "見直し" and i["type"] == "completed"]}
 
