@@ -69,10 +69,10 @@ class SlowAcceptanceTest(unittest.TestCase):
             return sorted(f.read().split())
 
     def test_a_hook_stops_waiting_and_the_run_goes_on_to_be_used_next_time(self):
-        started = time.monotonic()
         first = self.context()
-        self.assertLess(time.monotonic() - started, 5, "フックが全6秒の受入を待っている")
+        self.assertLess(len(self.ran()) if os.path.exists(self.runs) else 0, 3)   # フックは、3本とも終わるのを待っていない
         self.assertIn(GOING, first)
+        self.assertNotIn("走らせられなかった", first)                        # 途中であって、失敗ではない
         self.assertNotIn(COUNTS, first)
         self.assertIn("前線  DEMO-2 題 DEMO-2（Todo）", first)                # Linearから分かることは、待たずに出す
         self.until(lambda: COUNTS in self.context())
@@ -113,9 +113,10 @@ class SlowAcceptanceTest(unittest.TestCase):
         self.w.write("AGENTS.md", re.sub(r"(?m)^- 受入: .*$", "- 受入: `./fail.sh`", text))
         self.w.commit("行を出さずに失敗する遅いコマンド")
         self.assertIn(GOING, self.context())
-        self.until(lambda: "受入  走らせられなかった" in self.context())
+        self.until(lambda: GOING not in self.context())                     # 終わった（行を出さずに落ちた）
         self.assertIn("受入  走らせられなかった", self.context())
-        self.assertEqual(self.ran(), ["run"])
+        self.assertIn("受入  走らせられなかった", self.context())
+        self.assertEqual(self.ran(), ["run"])                               # 呼ばれるたびに、やり直していない
 
     def test_what_could_not_be_seen_at_the_start_does_not_hold_the_session(self):
         self.issues[1]["state"] = {"name": "Done", "type": "completed"}       # 前からある食い違い: DEMO-2 は Done だが、受入は赤い
