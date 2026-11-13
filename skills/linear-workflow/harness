@@ -328,7 +328,7 @@ def accept_run(repo, sha):
         entry = entry or (parse_entry(text) if rc == 0 else None)
     cmd = entry and (quoted(entry.get("受入")) or re.split(r"[（(]", entry.get("受入", ""), maxsplit=1)[0].strip())
     if not cmd:
-        return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い"}
+        return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い", "absent": True}
     tree = os.path.join(repo.store, "tree")
     rc = 0
     if not os.path.isdir(os.path.join(tree, ".git")):
@@ -336,6 +336,8 @@ def accept_run(repo, sha):
         rc, _ = git("clone", "-q", "--shared", "--no-checkout", repo.root, tree)
     if rc == 0:
         rc, _ = git("checkout", "-q", "--force", "--detach", sha, cwd=tree)
+    if rc == 0:
+        rc, _ = git("clean", "-ffdx", cwd=tree)
     if rc != 0:
         return {"error": "受入を走らせる場所を用意できなかった"}
     rc, out, err = sh(cmd, tree, 3600, env={**os.environ, "HARNESS_ROOT": repo.root}, cascade=True)
@@ -343,7 +345,7 @@ def accept_run(repo, sha):
         return {"error": "受入が " + err}
     results = parse_lines(out)
     if not results and rc != 0:
-        return {"error": "受入コマンドの出力に「緑／赤 Issue ID」の行が無い" + ("（" + last_line(err) + "）" if last_line(err) else "")}
+        return {"error": "受入コマンドの出力に「緑／赤 Issue ID」の行が無い" + ("（" + last_line(err) + "）" if last_line(err) else ""), "absent": True}
     return {"results": results}
 
 
@@ -352,7 +354,7 @@ def accept_at(repo, sha, fresh=False, wait=None):
     def left():
         for home in repo.places():
             hit = load(os.path.join(home, "accept", sha + ".json"))
-            if isinstance(hit, dict) and ("results" in hit or "error" in hit):
+            if isinstance(hit, dict) and ("results" in hit or hit.get("absent")):
                 return hit
     if not repo.store:
         return left() or {"error": "受入を走らせる場所が無い（.git にも、その外にも書けない）"}
@@ -413,8 +415,14 @@ def accept_at(repo, sha, fresh=False, wait=None):
                 except FileNotFoundError:
                     pass
         running = os.path.join(folder, sha + ".run")
+        try:
+            observer = open(running)
+        except FileNotFoundError:
+            observer = None
         state = active(running)
         if not state:
+            if observer:
+                observer.close()
             try:
                 os.remove(running)
             except FileNotFoundError:
@@ -423,10 +431,14 @@ def accept_at(repo, sha, fresh=False, wait=None):
                 os.remove(cache)
             elif left():
                 return left()
+            if os.path.exists(cache):
+                os.remove(cache)             # 旧形式の error は、版固有か一時失敗か分からない。走らせ直す。
             mark = open(running, "w+")
             fcntl.flock(mark, fcntl.LOCK_EX)
+            observer = open(running)         # 消されたあとも、この実行の結果だけを読める。
             pid = os.fork()
             if pid == 0:
+                observer.close()
                 os.close(lock)
                 os.setsid()
                 for fd in (0, 1, 2):
@@ -434,15 +446,20 @@ def accept_at(repo, sha, fresh=False, wait=None):
                     os.dup2(null, fd)
                     os.close(null)
                 try:
-                    while not os.path.exists(running):
+                    while (load(running) or {}).get("pid") != os.getpid():
                         time.sleep(.01)
                     try:
                         result = accept_run(repo, sha)
                     except Exception as e:
                         result = {"error": "受入の実行に失敗した: " + str(e)}
-                    temporary = cache + ".tmp"
-                    save(temporary, result)
-                    os.replace(temporary, cache)
+                    if "results" in result or result.get("absent"):
+                        temporary = cache + ".tmp"
+                        save(temporary, result)
+                        os.replace(temporary, cache)
+                    mark.seek(0)
+                    mark.truncate()
+                    json.dump({"pid": os.getpid(), "result": result}, mark)
+                    mark.flush()
                 finally:
                     if os.path.exists(running):
                         os.remove(running)
@@ -453,24 +470,27 @@ def accept_at(repo, sha, fresh=False, wait=None):
     finally:
         os.close(lock)
     end = time.monotonic() + wait if wait is not None else None
-    while True:
-        result = left()
-        if result:
-            return result
-        if not os.path.exists(running):
-            return left() or {"error": "受入の実行が結果を残さずに終わった"}
-        # 印の作成とロックの間を、別の呼出しが実行終了と誤認しない。
-        lock = os.open(folder, os.O_RDONLY)
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            alive = active(running)
-        finally:
-            os.close(lock)
-        if not alive:
-            return left() or {"error": "受入の実行が結果を残さずに終わった"}
-        if end is not None and time.monotonic() >= end:
-            return {"pending": True}
-        time.sleep(.05)
+    try:
+        while True:
+            if observer:
+                try:
+                    fcntl.flock(observer, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    observer.seek(0)
+                    try:
+                        return json.load(observer).get("result") or {"error": "受入の実行が結果を残さずに終わった"}
+                    except ValueError:
+                        return {"error": "受入の実行が結果を残さずに終わった"}
+            else:
+                return left() or {"error": "受入の実行が結果を残さずに終わった"}
+            if end is not None and time.monotonic() >= end:
+                return {"pending": True}
+            time.sleep(.05)
+    finally:
+        if observer:
+            observer.close()
 
 
 def cmd_accept():
@@ -574,7 +594,7 @@ def derive(repo, entry, fresh=False, wait=None):
                     P("changed:" + ident, f"{ident} 受入が main から消えた: {path}。戻すか、基準を人が変えたのならIssueの受入を直す")
                 elif repo.git("diff", "--quiet", sha, repo.sha, "--", path)[0] != 0:
                     P("changed:" + ident, f"{ident} 受入が、Issueに書いた版（{sha[:7]}）から変わった: {path}。"
-                      "基準を人が変えたのなら、所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す")
+                      "見直しで直した・基準を人が変えたのなら、所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す")
                 elif beside(path, sha):
                     P("changed:" + ident, f"{ident} 受入と同じ置き場の補助が、Issueに書いた版（{sha[:7]}）から変わった: "
                       f"{'、'.join(beside(path, sha)[:3])}。見直しで直した・基準を人が変えたのなら、"
@@ -980,9 +1000,13 @@ def cmd_gate(repo, base):
     start = repo.git("merge-base", base or repo.sha or "HEAD", "HEAD")[1] if (base or repo.sha) else ""
     if start == repo.head:
         start = repo.rev("HEAD~1")
-    before = accept_at(repo, start).get("results") if start else None
+    baseline = accept_at(repo, start) if start else {"absent": True, "error": "基準の版が無い"}
+    if baseline.get("error") and not baseline.get("absent"):
+        print("基準の版の受入を走らせられなかった: " + baseline["error"])
+        return 1
+    before = baseline.get("results")
     if not before:
-        print("基準の版に受入が無い。通す")
+        print("基準の版に受入が無い（" + baseline.get("error", "受入コマンドが正常に終わり、結果の行が無い") + "）。通す")
         return 0
     after = accept_at(repo, repo.head, fresh=True)
     now = after.get("results") or {}
