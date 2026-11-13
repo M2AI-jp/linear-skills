@@ -86,6 +86,26 @@ class NoAutomaticAcceptanceTest(unittest.TestCase):
         rc, out = self.w.run("gate")
         self.assertEqual(rc, 0, out)
 
+    def test_the_merge_gate_refuses_a_green_acceptance_disappearing_into_empty_output(self):
+        self.w.accept("DEMO-3", True)
+        before = self.w.commit("緑の自動受入を置く")
+        self.command("true")
+        rc, out = self.w.run("gate", before)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("DEMO-3", out)
+        self.assertIn("緑だった受入が消えた", out)
+
+    def test_a_mixed_project_still_counts_automatic_acceptance(self):
+        self.w.accept("DEMO-3", False)
+        sha = self.w.commit("赤の自動受入を置く")
+        self.issues += [issue("DEMO-3", "unstarted", self.w.auto("DEMO-3", sha), blocked_by=["DEMO-0"]),
+                        issue("DEMO-0", "unstarted", "受入（見直し）: 受入の抜け道を別の文脈が挙げて直す")]
+        self.w.linear(self.issues)
+        rc, out = self.w.run("check", "--wellformed")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("受入  緑 0 ／ 赤 0 ／ 未実装 1", out)
+        self.assertIn("食い違い  なし", out)
+
 
 if __name__ == "__main__":
     unittest.main()
