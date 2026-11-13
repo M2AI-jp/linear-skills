@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch
 
 import tests.test_harness as base
 
@@ -149,6 +150,12 @@ class ClosedNetworkTest(unittest.TestCase):
         self.w = base.World()
         self.addCleanup(self.w.close)
         _, self.issues = base.HarnessTest.standard(self)
+        # サンドボックスの中のプロセスは、置き場を TMPDIR に作る。共用の一時フォルダに残さないよう、この試験の中に向ける。
+        tmp = os.path.join(self.w.dir, "tmp")
+        os.makedirs(tmp)
+        environment = patch.dict(base.ENV, {"TMPDIR": tmp})
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def test_it_says_where_to_run_instead(self):
         self.w.linear(self.issues, down=True)
