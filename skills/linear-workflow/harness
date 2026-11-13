@@ -8,6 +8,9 @@
   harness accept              accept/ の下の受入を1本ずつ走らせる
   harness setup               フックとCIを登録する
 
+入口が無いときに開始のフックが走ったセッションは、入口を建てたあと停止のフックも建て終わりを判定する。
+通ればふつうのセッションになる。Linearに届かないサンドボックスでは、外で走らせる。
+
 入口。AGENTS.md か CLAUDE.md に置く。無いリポジトリでは、何も出さずに終わる。ブロックに書くのは、この5行だけ。
   ## 進め方
   - 正本: <Linear Project のURL>
@@ -17,7 +20,9 @@
   - 確認が要る: <取り消しにくい操作>
 
 受入のファイル。accept/<Issue ID>_<名前>。実行できること。終了コード0が緑。最初のコメント行が説明になる。
-追跡されているファイルだけの場所（main の版）で走る。
+追跡ファイルだけの場所で切り離して走る。3600秒で子プロセスごと止め、版ごとの結果を再利用する。
+フックは HARNESS_TIMEOUT 秒（既定240）待ち、途中なら継続して戻る。手動と gate は最後まで待つ。
+main が動けば古い実行を子プロセスごと止める。accept の1本ごとの上限も HARNESS_TIMEOUT 秒。
 同じ置き場にある、Issue ID で始まらないファイル（共有の関数、データ）は、そこにある受入の一部として比べる。
 
 Issue本文の受入。1行。
@@ -28,7 +33,7 @@ Issue本文の受入。1行。
   受入（見直し）: <どのIssueの受入の抜け道を、別の文脈が挙げて直すか> <完了時に、リンクか commit>
 
 check --wellformed が見るもの。
-  入口の5行がある。受入コマンドが main の版で走り、行を出す。Linearに届き、正本のProjectが引ける
+  入口の5行がある。受入コマンドが main の版で走る（自動が無ければ空の成功でもよい）。Linearに届き、正本のProjectが引ける
   Todo・In Progress・Done のIssueに受入がある。自動なら所在があり、main の出力に行がある
   Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
   自動の受入を持つ、開いているIssueは、受入（見直し）のIssueを待っている（Blocked by）
@@ -38,6 +43,8 @@ check --wellformed が見るもの。
   commit されていない変更が無い。前線（Blocked by の無い、開いているIssue）がある
 """
 import hashlib
+import fcntl
+import signal
 import json
 import os
 import re
@@ -63,12 +70,36 @@ def git(*args, cwd=None):
 
 
 def sh(cmd, cwd, timeout, stdin=None, env=None):
+    p = subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         errors="replace", env=env, start_new_session=True)
+    def stop(sig=signal.SIGTERM):
+        try:
+            os.killpg(p.pid, sig)
+        except ProcessLookupError:
+            pass
+    def finish():
+        stop()
+        try:
+            p.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            # shell が先に終わり、出力を閉じた子だけ残る場合も止める。
+            stop(signal.SIGKILL)
+            p.communicate()
+    def abort(*_):
+        finish()
+        raise SystemExit(0)
+    previous = signal.signal(signal.SIGTERM, abort)
     try:
-        p = subprocess.run(cmd, shell=True, cwd=cwd, input=stdin, capture_output=True,
-                           text=True, errors="replace", timeout=timeout, env=env)
-        return p.returncode, p.stdout, p.stderr
+        out, err = p.communicate(stdin, timeout=timeout)
+        return p.returncode, out, err
     except subprocess.TimeoutExpired:
+        finish()
         return None, "", f"{timeout} 秒で終わらなかった"
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def last_line(text):
@@ -141,7 +172,7 @@ class Repo:
         """書ける置き場。.git の中に書けるならそこ。書けない場所（Codex のサンドボックス）では .git の外。どこにも書けなければ None。"""
         if self._store is False:
             self._store = None
-            for home in self.places():
+            for home in [self.inside] + self.outside:
                 try:
                     os.makedirs(home, exist_ok=True)
                     probe = os.path.join(home, f".probe-{os.getpid()}")
@@ -160,11 +191,11 @@ class Repo:
         return self._store
 
     def places(self):
-        """置き場になりうる場所。書けなくても、読むことはできる。"""
-        return [self.inside] + self.outside
+        """読む置き場。.git 内に書けるプロセスは、外から置かれた記録を信じない。"""
+        return [self.inside] if self.store == self.inside else [self.inside] + self.outside
 
     def sessions(self):
-        """フックのあるセッションが残した記録。どの置き場にあっても読む。"""
+        """フックのあるセッションが、信頼できる置き場に残した記録。"""
         found = []
         for home in self.places():
             folder = os.path.join(home, "session")
@@ -281,21 +312,8 @@ def parse_lines(out):
     return results
 
 
-def accept_at(repo, sha, fresh=False):
-    """sha の版で受入コマンドを走らせる。CIと同じく、追跡されているファイルだけがある場所で走る。"""
-    def left():
-        """この版の結果が、どこかの置き場に残っていれば、それ。外で動くフックが残したものを、中からも使う。"""
-        for home in repo.places():
-            hit = load(os.path.join(home, "accept", sha + ".json"))
-            if isinstance(hit, dict) and hit.get("results"):
-                return hit
-        return None
-
-    if not fresh and left():
-        return left()
-    if not repo.store:
-        return left() or {"error": "受入を走らせる場所が無い（.git にも、その外にも書けない）"}
-    cache = os.path.join(repo.store, "accept", sha + ".json")
+def accept_run(repo, sha):
+    """切り離した実行者。結果だけを残す。"""
     entry = None
     for name in ("AGENTS.md", "CLAUDE.md"):
         rc, text = repo.git("show", f"{sha}:{name}")
@@ -312,16 +330,106 @@ def accept_at(repo, sha, fresh=False):
         rc, _ = git("checkout", "-q", "--force", "--detach", sha, cwd=tree)
     if rc != 0:
         return {"error": "受入を走らせる場所を用意できなかった"}
-    rc, out, err = sh(cmd, tree, TIMEOUT, env={**os.environ, "HARNESS_ROOT": repo.root})
+    rc, out, err = sh(cmd, tree, 3600, env={**os.environ, "HARNESS_ROOT": repo.root})
     if rc is None:
         return {"error": "受入が " + err}
     results = parse_lines(out)
-    if not results:
+    if not results and rc != 0:
         return {"error": "受入コマンドの出力に「緑／赤 Issue ID」の行が無い" + ("（" + last_line(err) + "）" if last_line(err) else "")}
-    os.makedirs(os.path.dirname(cache), exist_ok=True)
-    with open(cache, "w", encoding="utf-8") as f:
-        json.dump({"results": results}, f, ensure_ascii=False)
     return {"results": results}
+
+
+def accept_at(repo, sha, fresh=False, wait=None):
+    """同じ版の実行を共有する。フックだけは待つ時間を限る。"""
+    def left():
+        for home in repo.places():
+            hit = load(os.path.join(home, "accept", sha + ".json"))
+            if isinstance(hit, dict) and ("results" in hit or "error" in hit):
+                return hit
+    if not repo.store:
+        return left() or {"error": "受入を走らせる場所が無い（.git にも、その外にも書けない）"}
+    folder = os.path.join(repo.store, "accept")
+    os.makedirs(folder, exist_ok=True)
+    cache = os.path.join(folder, sha + ".json")
+    # 置き場自体をロックする。終わった印のファイルは残さない。
+    lock = os.open(folder, os.O_RDONLY)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for name in os.listdir(folder):
+            if not name.endswith(".run") or name == sha + ".run":
+                continue
+            old = load(os.path.join(folder, name)) or {}
+            try:
+                os.kill(old["pid"], signal.SIGTERM)
+                for _ in range(150):
+                    if not os.path.exists(os.path.join(folder, name)):
+                        break
+                    time.sleep(.02)
+            except (KeyError, ProcessLookupError):
+                pass
+            if os.path.exists(os.path.join(folder, name)):
+                try:
+                    os.kill(old["pid"], signal.SIGKILL)
+                except (KeyError, ProcessLookupError):
+                    pass
+                os.remove(os.path.join(folder, name))
+        running = os.path.join(folder, sha + ".run")
+        state = load(running)
+        if state:
+            try:
+                os.kill(state["pid"], 0)
+            except ProcessLookupError:
+                state = None
+        if not state:
+            if fresh and os.path.exists(cache):
+                os.remove(cache)
+            elif left():
+                return left()
+            pid = os.fork()
+            if pid == 0:
+                os.close(lock)
+                os.setsid()
+                for fd in (0, 1, 2):
+                    null = os.open(os.devnull, os.O_RDWR)
+                    os.dup2(null, fd)
+                    os.close(null)
+                try:
+                    while not os.path.exists(running):
+                        time.sleep(.01)
+                    try:
+                        result = accept_run(repo, sha)
+                    except Exception as e:
+                        result = {"error": "受入の実行に失敗した: " + str(e)}
+                    temporary = cache + ".tmp"
+                    save(temporary, result)
+                    os.replace(temporary, cache)
+                finally:
+                    if os.path.exists(running):
+                        os.remove(running)
+                    os._exit(0)
+            save(running, {"pid": pid})
+    finally:
+        os.close(lock)
+    end = time.monotonic() + wait if wait is not None else None
+    while True:
+        result = left()
+        if result:
+            return result
+        if not os.path.exists(running):
+            return left() or {"error": "受入の実行が結果を残さずに終わった"}
+        try:
+            os.kill((load(running) or {})["pid"], 0)
+            try:
+                dead, _ = os.waitpid((load(running) or {})["pid"], os.WNOHANG)
+            except ChildProcessError:
+                dead = 0
+            if dead:
+                raise ProcessLookupError
+        except (KeyError, ProcessLookupError):
+            return left() or {"error": "受入の実行が結果を残さずに終わった"}
+        if end is not None and time.monotonic() >= end:
+            return {"pending": True}
+        time.sleep(.05)
 
 
 def cmd_accept():
@@ -365,11 +473,12 @@ def work(repo, ident):
     return False, bool(named or repo.git("rev-list", "--branches", "--remotes", *grep)[1]), ""
 
 
-def derive(repo, entry, fresh=False):
+def derive(repo, entry, fresh=False, wait=None):
     d = {"problems": [], "front": [], "waiting": [], "backlog": 0, "linear": None, "issues": None}
-    acc = accept_at(repo, repo.sha, fresh) if repo.sha else {"error": "commit がまだ無い"}
+    acc = accept_at(repo, repo.sha, fresh, wait) if repo.sha else {"error": "commit がまだ無い"}
     d["accept_error"], results = acc.get("error"), acc.get("results")
     d["results"] = results
+    d["accept_pending"] = acc.get("pending", False)
 
     def P(key, text):
         d["problems"].append((key, text))
@@ -502,13 +611,19 @@ def derive(repo, entry, fresh=False):
 
     # Project の状態
     opened = [i for i in issues if i["type"] in OPEN]
-    green = bool(results) and all(r["ok"] for r in results.values())
+    green = results is not None and all(r["ok"] for r in results.values())
     if project["status"] == "completed":
         if opened or (results is not None and not green):
             P("project", "Project は完了になっているが、" + ("開いているIssueがある" if opened else "受入が落ちている"))
     elif project["status"] != "canceled" and issues and not opened and green:
         P("project", "開いているIssueが無く、受入が全部緑。Project を完了にする")
     return d
+
+
+def linear_hint(message):
+    if "CODEX_SANDBOX_NETWORK_DISABLED" in os.environ:
+        message += "。サンドボックスの外で走らせる"
+    return message
 
 
 def render(repo, entry, d):
@@ -518,7 +633,9 @@ def render(repo, entry, d):
         ahead = repo.git("rev-list", "--count", f"{repo.sha}..HEAD")[1]
         out.append(f"いま  {name}@{repo.head[:7]}（main より {ahead} 先）")
     results, known = d["results"], {i["id"]: i for i in d["issues"] or []}
-    if results is None:
+    if d.get("accept_pending"):
+        out.append("受入  走らせ続けている")
+    elif results is None:
         out.append("受入  走らせられなかった: " + d["accept_error"])
     elif d["issues"] is None:
         out.append(f"受入  緑 {sum(r['ok'] for r in results.values())} ／ 赤 {sum(not r['ok'] for r in results.values())}")
@@ -527,7 +644,7 @@ def render(repo, entry, d):
         todo = [k for k, r in results.items() if not r["ok"] and k not in red]
         out.append(f"受入  緑 {sum(r['ok'] for r in results.values())} ／ 赤 {len(red)} ／ 未実装 {len(todo)}")
     if d["linear"]:
-        out.append("Linear  届かない: " + d["linear"] + "（Linearの状態は確かめていない）")
+        out.append(linear_hint("Linear  届かない: " + d["linear"]) + "（Linearの状態は確かめていない）")
     else:
         def row(i):
             extra = [i["state"]] + ([i["where"]] if i.get("where") else [])
@@ -595,7 +712,38 @@ def save(path, data):
 def baseline(repo, d):
     """セッションの開始時に覚えておくもの。止めるのは、ここに無かった食い違いだけ。"""
     return {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}, "started": time.time(), "head": repo.head,
+            "accept_unknown": d["results"] is None, "accept_start": [{"id": i["id"], "type": i["type"], "kind": i["kind"], "archived": i["archived"]} for i in d["issues"]],
+            "project_start": d["project"]["status"],
             "reviews_done": [i["id"] for i in d["issues"] if i["kind"] == "見直し" and i["type"] == "completed"]}
+
+
+def absorb_results(path, state, d):
+    if state and not state.get("building") and state.get("accept_unknown") and d["results"] is not None:
+        issues, results = state.get("accept_start", []), d["results"]
+        keys = []
+        for i in issues:
+            ident, t = i["id"], i["type"]
+            res = results.get(ident)
+            if t == "canceled":
+                if res is not None:
+                    keys.append("stale:" + ident)
+            elif i["kind"] == "自動":
+                if res is None and (t in OPEN or not i["archived"]) and t not in ("triage", "backlog"):
+                    keys.append("noline:" + ident)
+                elif res and not res["ok"] and t == "completed":
+                    keys.append("red:" + ident)
+                elif res and res["ok"] and t in OPEN:
+                    keys.append("green:" + ident)
+        keys += ["orphan:" + ident for ident in set(results) - {i["id"] for i in issues}]
+        opened = any(i["type"] in OPEN for i in issues)
+        green = all(r["ok"] for r in results.values())
+        status = state.get("project_start")
+        if (status == "completed" and (opened or not green)) or (
+                status not in ("completed", "canceled", None) and issues and not opened and green):
+            keys.append("project")
+        state["keys"] = sorted(set(state["keys"]) | set(keys))
+        state["accept_unknown"] = False
+        save(path, state)
 
 
 def self_reviews(repo, d, state):
@@ -635,9 +783,11 @@ def built_reviews(repo, d):
 
 
 def cmd_status(repo, entry, hook, fresh):
-    d = derive(repo, entry, fresh)
+    d = derive(repo, entry, fresh, TIMEOUT if hook.get("hook_event_name") else None)
     text = render(repo, entry, d)
     path = session_file(repo, hook)
+    if path and not d["linear"]:
+        absorb_results(path, load(path), d)
     if path and not os.path.exists(path) and not d["linear"]:
         save(path, baseline(repo, d))
         folder = os.path.dirname(path)
@@ -654,14 +804,14 @@ def cmd_status(repo, entry, hook, fresh):
 
 def cmd_check(repo, entry, hook):
     """このセッションで生じた食い違いが残っていれば止める。同じ理由で止めるのは2回まで。"""
-    d = derive(repo, entry)
+    d = derive(repo, entry, wait=TIMEOUT if hook.get("hook_event_name") else None)
     as_hook = bool(hook.get("hook_event_name"))
     if d["linear"]:
         if as_hook:
-            print(json.dumps({"systemMessage": "harness: Linearに届かないので、状態を確かめずに通した（" + d["linear"] + "）"},
+            print(json.dumps({"systemMessage": linear_hint("harness: Linearに届かないので、状態を確かめずに通した（" + d["linear"] + "）")},
                              ensure_ascii=False))
         else:
-            print("Linearに届かない: " + d["linear"])
+            print(linear_hint("Linearに届かない: " + d["linear"]))
         return 0
     path = session_file(repo, hook)
     if as_hook and not path:
@@ -671,9 +821,21 @@ def cmd_check(repo, entry, hook):
         save(path, baseline(repo, d))
         return 0
     if state:
+        absorb_results(path, state, d)
         d["problems"] += self_reviews(repo, d, state)
-    known = set(state["keys"]) if state else set()
-    new = [(k, t) for k, t in d["problems"] if k not in known]
+    building = bool(state and state.get("building"))
+    if building:
+        faults = wellformed_faults(repo, entry, d)
+        if not faults:
+            state["building"] = False
+            state["keys"] = sorted(k for k, _ in d["problems"])
+            state["blocks"] = {}
+            save(path, state)
+            return 0
+        new = [("build:" + text, text) for text in faults]
+    else:
+        known = set(state["keys"]) if state else set()
+        new = [(k, t) for k, t in d["problems"] if k not in known]
     if not new:
         return 0
     lines = "\n".join("  " + t for _, t in new)
@@ -686,7 +848,8 @@ def cmd_check(repo, entry, hook):
             return 0
         state["blocks"][digest] = count + 1
         save(path, state)
-    reason = ("止める前に、このセッションで生じた食い違いを直す。\n" + lines + "\n"
+    reason = (("まだ整っていない。建て終わりの判定で名指しされたものを直す。\n" if building else
+               "止める前に、このセッションで生じた食い違いを直す。\n") + lines + "\n"
               "手順は " + guide(repo) + " の「引き直す」。同じ理由で止めるのは2回まで。")
     if as_hook:
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
@@ -695,13 +858,14 @@ def cmd_check(repo, entry, hook):
     return 1
 
 
-def cmd_wellformed(repo, entry):
+def wellformed_faults(repo, entry, d):
     faults = [f"入口に「{k}」が無い" for k in ("正本", "Linearの叩き方", "受入", "モジュール", "確認が要る") if not entry.get(k)]
-    d = derive(repo, entry, fresh=True)
+    if d.get("accept_pending"):
+        faults.append("受入を走らせ続けている。結果が出てから建て終わりを判定する")
     if d["accept_error"]:
         faults.append("受入を走らせられない: " + d["accept_error"])
     if d["linear"]:
-        faults.append("Linearに届かない: " + d["linear"])
+        faults.append(linear_hint("Linearに届かない: " + d["linear"]))
     faults += [text for _, text in d["problems"]]
     if d["issues"] is not None and not d["front"] and not d["waiting"]:
         faults.append("前線が無い（受入を持つ、開いているIssueが無い）")
@@ -735,6 +899,12 @@ def cmd_wellformed(repo, entry):
                 texts += f.read()
         if not re.search(r"harness\W+gate", texts):
             faults.append("CIに harness gate が無い（harness setup）")
+    return faults
+
+
+def cmd_wellformed(repo, entry):
+    d = derive(repo, entry, fresh=True)
+    faults = wellformed_faults(repo, entry, d)
     if faults:
         print("まだ整っていない")
         print("\n".join("  " + x for x in faults))
@@ -849,9 +1019,14 @@ def main(argv):
             print("まだ整っていない\n  入口が無い（AGENTS.md に「## 進め方」と「- 正本: <ProjectのURL>」）")
             return 1
         return cmd_wellformed(repo, entry)
-    if not entry:
-        return 0
     hook = hook_input(argv)
+    if not entry:
+        if sub == "status" and hook.get("hook_event_name") == "SessionStart":
+            path = session_file(repo, hook)
+            if path and not os.path.exists(path):
+                save(path, {"keys": [], "blocks": {}, "started": time.time(), "head": repo.head,
+                            "reviews_done": [], "building": True})
+        return 0
     if sub == "status":
         return cmd_status(repo, entry, hook, "--fresh" in argv)
     return cmd_check(repo, entry, hook)
