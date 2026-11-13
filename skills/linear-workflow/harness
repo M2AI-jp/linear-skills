@@ -439,6 +439,8 @@ def accept_at(repo, sha, fresh=False, wait=None):
             pid = os.fork()
             if pid == 0:
                 observer.close()
+                json.dump({"pid": os.getpid()}, mark)
+                mark.flush()                # 番号を残してから、別の呼び出しに置き場を渡す。
                 os.close(lock)
                 os.setsid()
                 for fd in (0, 1, 2):
@@ -446,8 +448,6 @@ def accept_at(repo, sha, fresh=False, wait=None):
                     os.dup2(null, fd)
                     os.close(null)
                 try:
-                    while (load(running) or {}).get("pid") != os.getpid():
-                        time.sleep(.01)
                     try:
                         result = accept_run(repo, sha)
                     except Exception as e:
@@ -464,8 +464,6 @@ def accept_at(repo, sha, fresh=False, wait=None):
                     if os.path.exists(running):
                         os.remove(running)
                     os._exit(0)
-            json.dump({"pid": pid}, mark)
-            mark.flush()
             mark.close()
     finally:
         os.close(lock)
