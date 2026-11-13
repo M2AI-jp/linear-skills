@@ -105,6 +105,17 @@ class BuiltBySessionTest(unittest.TestCase):
         self.assertIn("止める前に、このセッションで生じた食い違いを直す", held["reason"])
         self.assertNotIn(NOT_YET, held["reason"])
 
+    def test_the_builder_still_cannot_close_the_review_of_its_own_acceptances(self):
+        self.w.run("status", hook=self.start)
+        build(self, human=True)
+        self.assertNotIn("decision", self.verdict())                        # 建て終えた
+        self.issues[3]["state"] = {"name": "Done", "type": "completed"}      # そのセッションが、見直しを自分で閉じた
+        self.issues[3]["description"] = "受入（見直し）: 受入の抜け道を挙げて直した https://example.com/review"
+        self.w.linear(self.issues)
+        held = self.verdict()
+        self.assertEqual(held.get("decision"), "block", held)
+        self.assertIn("DEMO-0 受入を書いたセッションが、その見直しを閉じている", held["reason"])
+
     def test_a_later_session_is_not_judged_as_a_build(self):
         self.w.run("status", hook=self.start)
         build(self, human=False)                                            # 建て終わっていないまま、次のセッションが始まった
