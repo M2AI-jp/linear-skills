@@ -21,12 +21,19 @@ from tests.test_sandbox import COUNTS
 ONE_GREEN = "受入  緑 1 ／ 赤 0 ／ 未実装 0"
 
 
+def load_harness():
+    harness = types.ModuleType("audit_harness")
+    with open(base.HARNESS, encoding="utf-8") as f:
+        exec(compile(f.read(), base.HARNESS, "exec"), harness.__dict__)
+    return harness
+
+
 class GateBaseTest(unittest.TestCase):
     def setUp(self):
         self.w = base.World()
         self.addCleanup(self.w.close)
         _, self.issues = base.HarnessTest.standard(self)                     # DEMO-1 は緑、DEMO-2 と DEMO-3 は赤
-        self.tree = os.path.join(self.w.repo, ".git", "harness", "tree")
+        self.tree = os.path.join(load_harness().Repo(self.w.repo).store, "tree")
 
     def block_the_place(self):
         """受入を走らせる場所を、用意できなくする。場所の名前で、ただのファイルを置く。"""
@@ -133,9 +140,7 @@ class LeftoverTest(unittest.TestCase):
 class RunnerFailureTest(unittest.TestCase):
     def test_timeout_exception_and_missing_result_block_once_and_are_retried(self):
         # 一時間待つ代わりに実行境界で故障させる。forkした実行者と置き場は実物を使う。
-        harness = types.ModuleType("audit_harness")
-        with open(base.HARNESS, encoding="utf-8") as f:
-            exec(compile(f.read(), base.HARNESS, "exec"), harness.__dict__)
+        harness = load_harness()
         for failure in ("timeout", "exception", "missing"):
             with self.subTest(failure=failure):
                 w = base.World()
