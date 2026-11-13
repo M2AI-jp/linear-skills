@@ -14,6 +14,13 @@ SKILL = os.path.dirname(base.HARNESS)
 REQUIRED = "必須チェック"
 
 
+def required_check_message(test, text):
+    """単語だけでは、人がどの操作をするのか分からない。"""
+    test.assertRegex(text, r"(?s)main.{0,100}必須チェック")
+    test.assertIn("gate", text)
+    test.assertRegex(text, r"(?s)必須チェック.{0,200}マージでき")
+
+
 class AdoptTest(unittest.TestCase):
     """スキルを置いた、GitHub に remote のあるリポジトリ（ネットワークは使わない）。"""
 
@@ -36,13 +43,13 @@ class AdoptTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         with open(self.flow, encoding="utf-8") as f:
             self.assertRegex(f.read(), r"harness\W+gate")
-        self.assertIn(REQUIRED, out)
+        required_check_message(self, out)
 
     def test_it_is_said_again_while_the_gate_is_there(self):
         self.inside("setup")
         rc, out = self.inside("setup")                           # workflow はもうある。必須チェックにしたかは、機構からは見えない
         self.assertEqual(rc, 0, out)
-        self.assertIn(REQUIRED, out)
+        required_check_message(self, out)
 
     def test_setup_does_not_say_so_where_there_is_no_github(self):
         self.w.git("remote", "remove", "origin")
@@ -63,6 +70,20 @@ class AdoptTest(unittest.TestCase):
         self.w.commit("CIの門を足す")
         rc, out = self.w.run("check", "--wellformed")
         self.assertEqual(rc, 0, out)
+
+
+class AdoptionTextTest(unittest.TestCase):
+    def test_the_installation_and_skill_explain_the_required_check(self):
+        root = os.path.dirname(os.path.dirname(base.HARNESS))
+        root = os.path.dirname(root)
+        for path in (os.path.join(root, "README.md"), os.path.join(SKILL, "SKILL.md")):
+            with self.subTest(path=path), open(path, encoding="utf-8") as f:
+                required_check_message(self, f.read())
+
+    def test_the_skill_excludes_issue_ids_from_acceptance_only_commit_messages(self):
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertRegex(text, r"受入だけ[^\n。]*commit のメッセージ[^\n。]*Issue ID[^\n。]*(?:付けない|入れない)")
 
 
 if __name__ == "__main__":

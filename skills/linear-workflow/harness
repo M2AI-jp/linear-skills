@@ -53,7 +53,7 @@ import time
 import urllib.request
 
 ID = r"[A-Z][A-Z0-9]*-[0-9]+"
-LINE = re.compile(rf"^\s*(緑|赤|green|red)\s+({ID})(?![0-9])[\s:：-]*(.*)$", re.I)
+LINE = re.compile(rf"^(緑|赤|green|red)\s+({ID})(?![0-9])[\s:：-]*(.*)$", re.I)
 DECL = re.compile(r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?受入\s*[（(]\s*(自動|証拠|人|見直し)\s*[）)](?:\*\*)?\s*[:：]\s*(.*)$", re.M)
 ANCHOR = re.compile(r"([^\s`@（）()「」、]+)@([0-9a-f]{7,40})(?![0-9a-f])")
 TIMEOUT = int(os.environ.get("HARNESS_TIMEOUT", "240"))
@@ -226,6 +226,12 @@ class Repo:
 
     def git(self, *args):
         return git(*args, cwd=self.root)
+
+    def loose(self):
+        # -z は空白・日本語・改行を含むパスもそのまま返す。改名は削除と追加として両パスを見る。
+        parts = subprocess.run(["git", "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"],
+                               cwd=self.root, capture_output=True, text=True, errors="replace").stdout.split("\0")
+        return sorted({row[3:] for row in parts if len(row) >= 4})
 
 
 def find_repo():
@@ -607,7 +613,10 @@ def derive(repo, entry, fresh=False, wait=None):
                     P("green:" + ident, f"{ident} 受入が main で緑なのに {i['state']}。"
                       "終わっているなら完了に。着手前から緑なら、受入が何も確かめていない")
         elif kind in ("証拠", "見直し"):
-            if t == "completed" and not i["archived"] and not re.search(r"https?://|(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])", i["decl"]):
+            tokens = re.findall(r"(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])", i["decl"])
+            evidence = re.search(r"https?://", i["decl"]) or any(
+                re.search(r"[a-f]", token) or repo.rev(token) for token in tokens)
+            if t == "completed" and not i["archived"] and not evidence:
                 P("noevidence:" + ident, f"{ident} {i['state']}（{kind}）だが、証拠のリンクが無い")
         # 受入は、書いたのとは別の文脈に攻めさせてから実装に入る
         if kind == "自動" and t in ("unstarted", "started") and not any(
@@ -633,7 +642,7 @@ def derive(repo, entry, fresh=False, wait=None):
         P("orphan:" + ident, f"{ident} 受入の出力にあるが、このProjectにIssueが無い")
 
     # commit されていない変更は、どこにも書き戻されていない現実
-    loose = [x.split(None, 1)[1] for x in repo.git("status", "--porcelain")[1].splitlines() if len(x.split(None, 1)) == 2]
+    loose = d["loose"] = repo.loose()
     if loose:
         P("dirty", f"commit されていない変更が {len(loose)} 件ある（{'、'.join(loose[:3])}{' ほか' if len(loose) > 3 else ''}）。"
           "commit するか、捨てる（Issueの仕事なら、メッセージに Issue ID を入れる）")
@@ -787,7 +796,7 @@ def result_problem(issue, results):
 
 def baseline(repo, d):
     """セッションの開始時に覚えておくもの。止めるのは、ここに無かった食い違いだけ。"""
-    return {"keys": sorted(k for k, _ in d["problems"]), "blocks": {}, "started": time.time(), "head": repo.head, "accept_sha": repo.sha,
+    return {"keys": sorted(k for k, _ in d["problems"]), "loose": d.get("loose", []), "blocks": {}, "started": time.time(), "head": repo.head, "accept_sha": repo.sha,
             # 受入の結果がまだ無いときだけ、あとで突き合わせるために、Issueの状態を覚えておく
             "accept_unknown": d["results"] is None,
             "accept_start": [{"id": i["id"], "type": i["type"], "kind": i["kind"], "archived": i["archived"]}
@@ -911,6 +920,13 @@ def cmd_check(repo, entry, hook):
     else:
         known = set(state["keys"]) if state else set()
         new = [(k, t) for k, t in d["problems"] if k not in known]
+        if state and "loose" in state:
+            new = [(k, t) for k, t in new if k != "dirty"]
+            own = [p for p in d.get("loose", []) if p not in state["loose"]]
+            if own:
+                new.append(("dirty:" + "\0".join(own),
+                            f"commit されていない変更が {len(own)} 件ある（{'、'.join(own[:10])}{' ほか' if len(own) > 10 else ''}）。"
+                            "commit するか、捨てる（Issueの仕事なら、メッセージに Issue ID を入れる）"))
     if not new:
         return 0
     lines = "\n".join("  " + t for _, t in new)
@@ -1075,6 +1091,8 @@ def cmd_setup(repo):
                         "          persist-credentials: false\n"
                         "      - run: " + rel + ' gate "${{ github.event.pull_request.base.sha || github.event.before }}"\n')
             print("CI: .github/workflows/accept.yml")
+        print("GitHub で、この検査（gate）を main の必須チェックにする（人の操作）。"
+              "しなければ、緑だった受入を赤にする変更も、赤いままマージできる")
     return 1 if failed else 0
 
 
