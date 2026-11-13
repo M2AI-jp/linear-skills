@@ -17,4 +17,4 @@
 - Linearの叩き方: `~/.local/bin/linear-api`（GraphQLのJSONを標準入力で渡す）
 - 受入: `skills/linear-workflow/harness accept`（出力は Issue ID ごとの緑・赤）
 - モジュール: skills/linear-workflow = 配布物、. = つなぎ
-- 確認が要る: Linearの既存Issueのアーカイブと削除、スキルの導入（`~/.claude/skills`・`~/.codex/skills`・ほかのリポジトリへの配置）、このリポジトリの外への一切の操作
+- 確認が要る: Issueの削除、ほかの Linear Project への書き込み、スキルの導入（`~/.claude/skills`・`~/.codex/skills`・ほかのリポジトリへの配置）、ほかのリポジトリと `~/.claude`・`~/.codex` への操作
