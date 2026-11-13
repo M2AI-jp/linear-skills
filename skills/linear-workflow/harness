@@ -33,7 +33,7 @@ Issue本文の受入。1行。
   受入（見直し）: <どのIssueの受入の抜け道を、別の文脈が挙げて直すか> <完了時に、リンクか commit>
 
 check --wellformed が見るもの。
-  入口の5行がある。受入コマンドが main の版で走る（自動が無ければ空の成功でもよい）。Linearに届き、正本のProjectが引ける
+  入口の5行がある。受入コマンドが main の版で走る（自動が無ければ終了コード0なら行は出なくてよい）。Linearに届き、正本のProjectが引ける
   Todo・In Progress・Done のIssueに受入がある。自動なら所在があり、main の出力に行がある
   Todo の受入は赤（着手前から緑なら、何も確かめていない）。Canceled の受入は消してある
   自動の受入を持つ、開いているIssueは、受入（見直し）のIssueを待っている（Blocked by）
@@ -69,7 +69,7 @@ def git(*args, cwd=None):
     return p.returncode, p.stdout.strip()
 
 
-def sh(cmd, cwd, timeout, stdin=None, env=None):
+def sh(cmd, cwd, timeout, stdin=None, env=None, cascade=False):
     p = subprocess.Popen(cmd, shell=True, cwd=cwd, stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          errors="replace", env=env, start_new_session=True)
@@ -88,13 +88,22 @@ def sh(cmd, cwd, timeout, stdin=None, env=None):
             # shell が先に終わり、出力を閉じた子だけ残る場合も止める。
             stop(signal.SIGKILL)
             p.communicate()
+    class Stopped(Exception):
+        pass
     def abort(*_):
-        finish()
-        raise SystemExit(0)
+        # communicate の途中から再び communicate を呼ばず、一度抜けて片づける。
+        raise Stopped
     previous = signal.signal(signal.SIGTERM, abort)
     try:
         out, err = p.communicate(stdin, timeout=timeout)
         return p.returncode, out, err
+    except Stopped:
+        if cascade:
+            finish()                         # 下位 harness が、その子を止め終わるのを待つ。
+        else:
+            stop(signal.SIGKILL)              # 単体の受入は即座に止め、外側と猶予が競合しない。
+            p.communicate()
+        raise SystemExit(0)
     except subprocess.TimeoutExpired:
         finish()
         return None, "", f"{timeout} 秒で終わらなかった"
@@ -330,7 +339,7 @@ def accept_run(repo, sha):
         rc, _ = git("checkout", "-q", "--force", "--detach", sha, cwd=tree)
     if rc != 0:
         return {"error": "受入を走らせる場所を用意できなかった"}
-    rc, out, err = sh(cmd, tree, 3600, env={**os.environ, "HARNESS_ROOT": repo.root})
+    rc, out, err = sh(cmd, tree, 3600, env={**os.environ, "HARNESS_ROOT": repo.root}, cascade=True)
     if rc is None:
         return {"error": "受入が " + err}
     results = parse_lines(out)
@@ -447,7 +456,7 @@ def cmd_accept():
                 if t:
                     title = t.group(1).strip()
                     break
-        rc, out, err = sh("./" + path, ".", TIMEOUT)
+        rc, out, err = sh("exec ./" + path, ".", TIMEOUT)
         print(("緑" if rc == 0 else "赤"), m.group(1), title)
         if rc != 0:
             red = True
