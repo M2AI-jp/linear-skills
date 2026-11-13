@@ -663,7 +663,7 @@ def derive(repo, entry, fresh=False, wait=None):
 
 def linear_hint(message):
     if any(k in os.environ for k in ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")):
-        message += "。Codexのサンドボックスの中からは、ふつう届かない（故障ではない）。確かめるなら、サンドボックスの外で走らせる。フックは外で動くので、現在地と停止の門には届いている"
+        message += "。Codexのサンドボックスの中からは、ふつう届かない（故障ではない）。確かめるなら、サンドボックスの外で走らせる。フックは外で動くので、現在地と停止の門には届いている。建て終わりも、フックが登録してあれば、止まるときに停止のフックが判定する（止められなければ、整っている）"
     return message
 
 
