@@ -925,7 +925,8 @@ def cmd_check(repo, entry, hook):
             own = [p for p in d.get("loose", []) if p not in state["loose"]]
             if own:
                 new.append(("dirty:" + "\0".join(own),
-                            f"commit されていない変更が {len(own)} 件ある（{'、'.join(own)}）。commit するか、捨てる"))
+                            f"commit されていない変更が {len(own)} 件ある（{'、'.join(own[:10])}{' ほか' if len(own) > 10 else ''}）。"
+                            "commit するか、捨てる（Issueの仕事なら、メッセージに Issue ID を入れる）"))
     if not new:
         return 0
     lines = "\n".join("  " + t for _, t in new)
@@ -1090,8 +1091,8 @@ def cmd_setup(repo):
                         "          persist-credentials: false\n"
                         "      - run: " + rel + ' gate "${{ github.event.pull_request.base.sha || github.event.before }}"\n')
             print("CI: .github/workflows/accept.yml")
-        print("人が GitHub で main の必須チェックに CI の gate 検査を設定する。"
-              "必須チェックにしなければ、緑だった受入を赤にする変更もマージできる")
+        print("GitHub で、この検査（gate）を main の必須チェックにする（人の操作）。"
+              "しなければ、緑だった受入を赤にする変更も、赤いままマージできる")
     return 1 if failed else 0
 
 
