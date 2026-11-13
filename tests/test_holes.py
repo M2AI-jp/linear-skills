@@ -9,9 +9,11 @@
 """
 import json
 import os
+import signal
 import subprocess
 import time
 import unittest
+from unittest.mock import patch
 
 import tests.test_harness as base
 import tests.test_slow as slow
@@ -24,12 +26,48 @@ STOP = {"hook_event_name": "Stop", "session_id": "h1"}
 
 class InsideTheSandboxTest(unittest.TestCase):
     def setUp(self):
+        # この検査の「外」は、実行元のCodex環境を引き継がずに作る。
+        env = {k: v for k, v in base.ENV.items() if k not in INSIDE}
+        environment = patch.dict(base.ENV, env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         w = self.w = base.World()
         self.addCleanup(w.close)
         _, self.issues = base.HarnessTest.standard(self)
         self.outside = os.path.join(w.dir, "outside")
         os.makedirs(self.outside)
         self.inside = {**INSIDE, "HARNESS_STORE": self.outside}
+
+    def assert_inside_preserves_existing_store(self, flag):
+        self.w.run("status", hook=START)
+        place = os.path.join(self.w.repo, ".git", "harness")
+
+        def contents():
+            found = {}
+            for folder, _, files in os.walk(place):
+                for name in files:
+                    path = os.path.join(folder, name)
+                    with open(path, "rb") as f:
+                        found[os.path.relpath(path, place)] = (os.stat(path).st_mtime_ns, f.read())
+            return found
+
+        before = contents()
+        self.assertTrue(before)
+        # 外の既存結果を読めても、中の再実行や同じsession_idの記録で上書きしてはいけない。
+        rc, out = self.w.run("status", "--fresh", hook=START,
+                             env={flag: INSIDE[flag], "HARNESS_STORE": self.outside})
+        self.assertEqual(rc, 0, out)
+        self.assertIn(COUNTS, json.loads(out)["hookSpecificOutput"]["additionalContext"])
+        after = contents()
+        changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+        self.assertEqual(changed, [], "中の実行が .git の置き場を書き換えた")
+        self.assertTrue(os.listdir(self.outside))
+
+    def test_codex_sandbox_alone_preserves_the_existing_outside_hook_store(self):
+        self.assert_inside_preserves_existing_store("CODEX_SANDBOX")
+
+    def test_network_disabled_alone_preserves_the_existing_outside_hook_store(self):
+        self.assert_inside_preserves_existing_store("CODEX_SANDBOX_NETWORK_DISABLED")
 
     def test_nothing_is_put_in_git_from_inside_even_when_git_is_writable(self):
         _, out = self.w.run("status", env=self.inside)
@@ -106,6 +144,57 @@ class BlindStartTest(unittest.TestCase):
 
         verdict = self.until(held)
         self.assertIn("DEMO-1 題 DEMO-1 … Done なのに受入が落ちている", verdict["reason"])
+
+    def test_the_start_version_result_exempts_only_the_preexisting_problem_after_main_moves(self):
+        self.issues[1]["state"] = {"name": "Done", "type": "completed"}
+        self.w.linear(self.issues)
+        self.assertIn(slow.GOING, self.context())
+        self.until(lambda: "受入  緑 1 ／ 赤 1 ／ 未実装 1"
+                   in self.w.run("status", env=self.env)[1])
+        # 開始時の結果は出たが、停止フックはまだ呼んでいない。その後 main が動く。
+        self.w.write("app/main.txt", "v2\n")
+        self.w.commit("このセッションが DEMO-1 を壊した")
+
+        def held():
+            out = self.w.run("check", hook=slow.STOP, env=self.env)[1]
+            verdict = json.loads(out) if out else {}
+            return verdict if verdict.get("decision") == "block" else None
+
+        verdict = self.until(held)
+        self.assertIn("DEMO-1 題 DEMO-1 … Done なのに受入が落ちている", verdict["reason"])
+        self.assertNotIn("DEMO-2 題", verdict["reason"])
+
+
+class InterruptedAcceptanceTest(unittest.TestCase):
+    until = slow.SlowAcceptanceTest.until
+
+    def test_sigterm_does_not_report_success(self):
+        self.w = w = base.World()
+        self.addCleanup(w.close)
+        pidfile = os.path.join(w.dir, "pid")
+        w.write("accept/DEMO-1_check", '#!/bin/sh\necho $$ > "$PIDFILE"\nexec sleep 50\n', True)
+        process = subprocess.Popen([base.HARNESS, "accept"], cwd=w.repo, start_new_session=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env={**base.ENV, "PIDFILE": pidfile, "HARNESS_TIMEOUT": "60"})
+        child = None
+        try:
+            def started():
+                if os.path.exists(pidfile):
+                    with open(pidfile) as f:
+                        return f.read().strip()
+
+            child = int(self.until(started))
+            process.terminate()
+            out, err = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0, out + err)
+        finally:
+            for pid, grouped in ((process.pid, True), (child, False)):
+                if pid is not None:
+                    try:
+                        (os.killpg if grouped else os.kill)(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            process.communicate(timeout=10)
 
 
 if __name__ == "__main__":

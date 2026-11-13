@@ -69,12 +69,19 @@ class SlowAcceptanceTest(unittest.TestCase):
             return sorted(f.read().split())
 
     def test_a_hook_stops_waiting_and_the_run_goes_on_to_be_used_next_time(self):
+        # 時間の長短ではなく、人が解放するまで終わらない受入で、戻った順序を確かめる。
+        release = os.path.join(self.w.dir, "release")
+        self.env["RELEASE"] = release
+        self.addCleanup(lambda: open(release, "a").close())
+        self.slow("DEMO-1", True, body='while [ ! -f "$RELEASE" ]; do sleep 0.1; done\necho {ident} >> "$RUNS"')
+        self.w.commit("解放されるまで受入を待たせる")
         first = self.context()
-        self.assertLess(len(self.ran()) if os.path.exists(self.runs) else 0, 3)   # フックは、3本とも終わるのを待っていない
+        self.assertFalse(os.path.exists(self.runs))                          # 最初の受入すら終わる前に戻った
         self.assertIn(GOING, first)
         self.assertNotIn("走らせられなかった", first)                        # 途中であって、失敗ではない
         self.assertNotIn(COUNTS, first)
         self.assertIn("前線  DEMO-2 題 DEMO-2（Todo）", first)                # Linearから分かることは、待たずに出す
+        open(release, "a").close()
         self.until(lambda: COUNTS in self.context())
         self.assertEqual(self.ran(), ["DEMO-1", "DEMO-2", "DEMO-3"])         # 途中でやり直していない。1本ずつ、1回だけ
         place = os.path.join(self.w.repo, ".git", "harness", "accept")
@@ -109,10 +116,14 @@ class SlowAcceptanceTest(unittest.TestCase):
     def test_a_failed_background_command_is_remembered_without_restarting(self):
         with open(os.path.join(self.w.repo, "AGENTS.md"), encoding="utf-8") as f:
             text = f.read()
-        self.w.write("fail.sh", '#!/bin/sh\necho run >> "$RUNS"\nsleep 4\nexit 3\n', True)
+        release = os.path.join(self.w.dir, "release")
+        self.env["RELEASE"] = release
+        self.addCleanup(lambda: open(release, "a").close())
+        self.w.write("fail.sh", '#!/bin/sh\necho run >> "$RUNS"\nwhile [ ! -f "$RELEASE" ]; do sleep 0.1; done\nexit 3\n', True)
         self.w.write("AGENTS.md", re.sub(r"(?m)^- 受入: .*$", "- 受入: `./fail.sh`", text))
         self.w.commit("行を出さずに失敗する遅いコマンド")
         self.assertIn(GOING, self.context())
+        open(release, "a").close()
         self.until(lambda: GOING not in self.context())                     # 終わった（行を出さずに落ちた）
         self.assertIn("受入  走らせられなかった", self.context())
         self.assertIn("受入  走らせられなかった", self.context())
