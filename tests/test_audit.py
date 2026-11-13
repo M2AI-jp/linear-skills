@@ -8,7 +8,11 @@
 """
 import os
 import re
+import contextlib
+import io
+import types
 import unittest
+from unittest.mock import patch
 
 import tests.test_harness as base
 from tests.test_harness import issue
@@ -74,6 +78,23 @@ class GateBaseTest(unittest.TestCase):
         os.remove(self.tree)                                                 # 原因が無くなった
         self.assertIn(COUNTS, self.w.run("status")[1])
 
+    def test_an_empty_success_is_a_result_and_is_not_run_again(self):
+        marker = os.path.join(self.w.dir, "ran")
+        self.command(f"echo ran >> {marker}", "行が無いが正常に終わる受入")
+        self.w.run("status")
+        self.w.run("status")
+        with open(marker, encoding="utf-8") as f:
+            self.assertEqual(f.read().splitlines(), ["ran"])
+
+    def test_reported_results_are_protected_even_if_the_command_exits_nonzero(self):
+        self.command("sh -c 'echo 緑 DEMO-1 守るべき受入; exit 1'", "結果を出して異常終了する受入")
+        self.w.git("checkout", "-q", "-b", "work")
+        self.command("echo 赤 DEMO-1 壊れた受入", "緑を赤に変える")
+        rc, out = self.w.run("gate", "main")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("DEMO-1", out)
+        self.assertNotIn("基準の版に受入が無い", out)
+
 
 class LeftoverTest(unittest.TestCase):
     def setUp(self):
@@ -89,11 +110,55 @@ class LeftoverTest(unittest.TestCase):
     def test_what_an_earlier_version_left_is_not_there_for_the_next(self):
         self.assertIn(ONE_GREEN, self.w.run("status")[1])
         self.w.write("accept/DEMO-1_check", "#!/bin/sh\n# DEMO-1 の観測できる結果\n"
-                     "[ ! -e left-behind.txt ] && [ ! -e build/out.txt ]\n", True)                # 次の版は、残りものがあると落ちる
+                     "[ ! -e left-behind.txt ] && [ ! -e build/out.txt ]\n", True)
         sha = self.w.commit("ものを作るのをやめた")
         self.issues[0]["description"] = self.w.auto("DEMO-1", sha)
         self.w.linear(self.issues)
         self.assertIn(ONE_GREEN, self.w.run("status")[1])
+
+    def test_an_untracked_nested_repository_is_also_removed(self):
+        self.w.write("accept/DEMO-1_check", "#!/bin/sh\n# 受入が作った入れ子のリポジトリ\n"
+                     "git init -q build/nested && echo x > build/nested/out.txt\n", True)
+        sha = self.w.commit("受入が入れ子のリポジトリを作る")
+        self.issues[0]["description"] = self.w.auto("DEMO-1", sha)
+        self.w.linear(self.issues)
+        self.assertIn(ONE_GREEN, self.w.run("status")[1])
+        self.w.write("accept/DEMO-1_check", "#!/bin/sh\n# 入れ子のリポジトリも残さない\n[ ! -e build ]\n", True)
+        sha = self.w.commit("前の版が作った入れ子のリポジトリが無い")
+        self.issues[0]["description"] = self.w.auto("DEMO-1", sha)
+        self.w.linear(self.issues)
+        self.assertIn(ONE_GREEN, self.w.run("status")[1])
+
+
+class RunnerFailureTest(unittest.TestCase):
+    def test_timeout_exception_and_missing_result_block_once_and_are_retried(self):
+        # 一時間待つ代わりに実行境界で故障させる。forkした実行者と置き場は実物を使う。
+        harness = types.ModuleType("audit_harness")
+        with open(base.HARNESS, encoding="utf-8") as f:
+            exec(compile(f.read(), base.HARNESS, "exec"), harness.__dict__)
+        for failure in ("timeout", "exception", "missing"):
+            with self.subTest(failure=failure):
+                w = base.World()
+                self.addCleanup(w.close)
+                w.accept("DEMO-1", True)
+                w.commit()
+                repo = harness.Repo(w.repo)
+                real_sh = harness.sh
+
+                def fail(*args, **kwargs):
+                    if failure == "timeout":
+                        return None, "", "上限の時間で終わらなかった"
+                    if failure == "exception":
+                        raise OSError("実行途中の故障")
+                    os._exit(0)  # 結果を置かずに実行者が消える。
+
+                output = io.StringIO()
+                with patch.object(harness, "sh", side_effect=fail), contextlib.redirect_stdout(output):
+                    self.assertEqual(harness.cmd_gate(repo, "main"), 1)
+                self.assertIn("基準の版の受入を走らせられなかった", output.getvalue())
+                with patch.object(harness, "sh", side_effect=real_sh):
+                    result = harness.accept_at(repo, repo.sha)
+                self.assertTrue(result.get("results", {}).get("DEMO-1", {}).get("ok"), result)
 
 
 class WordingTest(unittest.TestCase):
