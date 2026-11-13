@@ -147,6 +147,9 @@ class RunnerFailureTest(unittest.TestCase):
                 self.addCleanup(w.close)
                 w.accept("DEMO-1", True)
                 w.commit()
+                w.git("checkout", "-q", "-b", "work")
+                w.write("app/main.txt", "v2\n")
+                w.commit("基準版からの変更")
                 repo = harness.Repo(w.repo)
                 real_sh = harness.sh
 
@@ -158,8 +161,9 @@ class RunnerFailureTest(unittest.TestCase):
                     os._exit(0)  # 結果を置かずに実行者が消える。
 
                 output = io.StringIO()
-                with patch.object(harness, "sh", side_effect=fail), contextlib.redirect_stdout(output):
+                with patch.object(harness, "sh", side_effect=fail) as failed_run, contextlib.redirect_stdout(output):
                     self.assertEqual(harness.cmd_gate(repo, "main"), 1)
+                failed_run.assert_called_once()
                 self.assertIn("基準の版の受入を走らせられなかった", output.getvalue())
                 with patch.object(harness, "sh", side_effect=real_sh):
                     result = harness.accept_at(repo, repo.sha)
