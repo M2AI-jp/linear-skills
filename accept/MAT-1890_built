@@ -1,0 +1,5 @@
+#!/bin/sh
+# フックが登録済みで入口の無いところから建てたセッションは、建て終わりの判定が通るまで停止の門に止められ（同じ理由は2回まで）、通ったあとはふつうのセッションになる。Codexのサンドボックスの中でLinearに届かないとき、harness は外で走らせることを言う
+python3 -m unittest -q tests.test_built || exit 1
+skills/linear-workflow/harness | grep -qF "建て終わりの判定が通るまで止める" || { echo "使い方が、建てたセッションを停止の門が判定することを言っていない"; exit 1; }
+grep -qF "はLinearに届かない" skills/linear-workflow/SKILL.md || { echo "SKILL.md が、Codexのサンドボックスの中で走らせる harness はLinearに届かないことを言っていない"; exit 1; }
