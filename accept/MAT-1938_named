@@ -1,0 +1,3 @@
+#!/bin/sh
+# Issue の無い ID、Canceled の受入、モジュール表、Project の状態、所在が無い・版が無い、入口が読めない、Linear のエラーとページングと鍵の経路、門の基準の決め方を、機構がいまのとおりに名指しする
+python3 -m unittest -q tests.test_named || exit 1

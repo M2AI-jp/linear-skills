@@ -1,0 +1,10 @@
+#!/bin/sh
+# スキルは、In Progress にブランチか commit が要るのは自動の受入を持つIssueだと言い、見直しを任せるサブエージェントは建てたセッションのものではないと言う。README は、外すときに消す置き場、要る Python の版、LINEAR_API_KEY で叩くコマンドの例を言い、現在地の出力例に直し方の行がある
+s=skills/linear-workflow/SKILL.md
+grep -qF "自動の受入を持つIssueなら" "$s" || { echo "SKILL.md の状態の表が、In Progress の条件を自動の受入を持つIssueに限っていない"; exit 1; }
+grep -qF "建てたセッションのサブエージェントは" "$s" || { echo "SKILL.md が、建てたセッションのサブエージェントを別の文脈に数えないことを言っていない"; exit 1; }
+grep -F "外すときは" README.md | grep -qF ".git/harness" || { echo "README の外し方に、置き場（.git/harness）が無い"; exit 1; }
+grep -F "外すときは" README.md | grep -qF "harness-" || { echo "README の外し方に、.git の外の置き場（harness-…）が無い"; exit 1; }
+grep -qE "Python 3\.[0-9]+ 以上" README.md || { echo "README に、要る Python の版が無い"; exit 1; }
+grep -qF "api.linear.app/graphql" README.md || { echo "README に、LINEAR_API_KEY で叩くコマンドの例が無い"; exit 1; }
+grep -qF "の「引き直す」" README.md || { echo "README の現在地の出力例に、直し方の場所の行が無い"; exit 1; }
