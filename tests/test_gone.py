@@ -74,7 +74,7 @@ class UnstoppableOldRunTest(unittest.TestCase):
         place = os.path.join(repo.store, "accept")
         before = sorted(n for n in os.listdir(place) if n.endswith(".run"))
         self.assertEqual(len(before), 1)
-        with patch.object(harness.os, "kill", refuse) as kill, \
+        with patch.object(harness.os, "kill", side_effect=refuse) as kill, \
                 patch.object(harness.os, "fork") as fork:
             waited = harness.accept_at(repo, repo.sha, wait=1)                # フックの待ち方
             asked = harness.accept_at(repo, repo.sha)                         # 手で走らせたときの待ち方
