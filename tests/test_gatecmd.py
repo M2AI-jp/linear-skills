@@ -69,9 +69,10 @@ class GateCommandTest(unittest.TestCase):
 
     def test_the_position_after_the_merge_uses_the_command_of_that_version(self):
         self.command(f"sh -c '{base.HARNESS} accept; echo 緑 DEMO-9 この版のコマンドだけが出す行'", "受入コマンドを変える")
-        rc, out = self.w.run("gate", "main")                                 # 門は、基準の版のコマンドで走らせた（DEMO-9 は出ない）
+        rc, out = self.w.run("gate", "main")                                 # 通知のコマンド中には DEMO-9 があっても、受入結果には無い
         self.assertEqual(rc, 0, out)
-        self.assertNotIn("DEMO-9", out)
+        self.assertIn("この版の受入  緑 1 ／ 赤 1（DEMO-2）", out)
+        self.assertNotRegex(out, r"(?m)^\s*[緑赤] DEMO-9(?:\s|$)")
         self.w.git("checkout", "-q", "main")
         self.w.git("merge", "-q", "--ff-only", "work")                       # 同じ版が main になる
         self.w.linear([issue("DEMO-1", "completed", self.w.auto("DEMO-1", self.sha)),
