@@ -94,12 +94,14 @@ class GateBaseTest(unittest.TestCase):
             self.assertEqual(f.read().splitlines(), ["ran"])
 
     def test_reported_results_are_protected_even_if_the_command_exits_nonzero(self):
-        self.command("sh -c 'echo 緑 DEMO-1 守るべき受入; exit 1'", "結果を出して異常終了する受入")
+        self.command("sh -c 'if grep -q v1 app/main.txt; then echo 緑 DEMO-1 守るべき受入; else echo 赤 DEMO-1 壊れた受入; fi; exit 1'", "結果を出して異常終了する受入")
         self.w.git("checkout", "-q", "-b", "work")
-        self.command("echo 赤 DEMO-1 壊れた受入", "緑を赤に変える")
+        self.w.write("app/main.txt", "v2\n")
+        self.w.commit("アプリを壊す（受入コマンドは同じ）")
         rc, out = self.w.run("gate", "main")
         self.assertEqual(rc, 1, out)
         self.assertIn("DEMO-1", out)
+        self.assertIn("緑だった受入が赤になった", out)
         self.assertNotIn("基準の版に受入が無い", out)
 
 
