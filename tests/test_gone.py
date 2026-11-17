@@ -8,6 +8,7 @@ Codex のサンドボックスの中から、外で動いている実行にシ�
 import contextlib
 import io
 import os
+import signal
 import unittest
 from unittest.mock import patch
 
@@ -23,10 +24,14 @@ def refuse(*args):
 class GoneTest(unittest.TestCase):
     def test_a_timeout_is_still_reported_when_the_group_cannot_be_signalled(self):
         harness = named.load_harness()
-        with patch.object(harness.os, "killpg", refuse):
-            rc, out, err = harness.sh("sleep 3", ".", 1)
-        self.assertIsNone(rc)
-        self.assertEqual(err, "1 秒で終わらなかった")
+        for failure in (PermissionError, ProcessLookupError):
+            with self.subTest(failure=failure.__name__):
+                with patch.object(harness.os, "killpg", side_effect=failure()) as kill:
+                    rc, out, err = harness.sh("sleep 3", ".", 1)
+                self.assertIsNone(rc)
+                self.assertEqual(err, "1 秒で終わらなかった")
+                self.assertEqual([call.args[1] for call in kill.call_args_list],
+                                 [signal.SIGTERM, signal.SIGKILL])
 
     def test_the_acceptance_is_red_and_the_others_still_run(self):
         w = base.World()
@@ -66,14 +71,20 @@ class UnstoppableOldRunTest(unittest.TestCase):
         self.w.commit("main が動いた")
         harness = named.load_harness()
         repo = harness.Repo(self.w.repo)
-        place = os.path.join(self.w.repo, ".git", "harness", "accept")
-        with patch.object(harness.os, "kill", refuse):
+        place = os.path.join(repo.store, "accept")
+        before = sorted(n for n in os.listdir(place) if n.endswith(".run"))
+        self.assertEqual(len(before), 1)
+        with patch.object(harness.os, "kill", side_effect=refuse) as kill, \
+                patch.object(harness.os, "fork") as fork:
             waited = harness.accept_at(repo, repo.sha, wait=1)                # フックの待ち方
             asked = harness.accept_at(repo, repo.sha)                         # 手で走らせたときの待ち方
         self.assertEqual(waited, {"pending": True})
-        self.assertIn("error", asked)
-        self.assertNotIn("results", asked)
-        self.assertTrue([n for n in os.listdir(place) if n.endswith(".run")])   # 古い実行の印は、消していない
+        self.assertEqual(asked, {"error": "古い版の受入がまだ終了していない"})
+        fork.assert_not_called()                                              # 新しい版を始めていない
+        self.assertEqual([call.args[1] for call in kill.call_args_list],
+                         [signal.SIGTERM, signal.SIGKILL] * 2)
+        self.assertEqual(sorted(n for n in os.listdir(place) if n.endswith(".run")), before)
+        self.assertFalse(os.path.exists(os.path.join(place, repo.sha + ".json")))
         open(self.release, "a").close()                                      # 古い実行が、自分で終わる
         self.until(lambda: not [n for n in os.listdir(place) if n.endswith(".run")])
 
