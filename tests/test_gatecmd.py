@@ -46,6 +46,8 @@ class GateCommandTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn(DIFFERENT, out)
         self.assertIn("緑だった受入 1 本は緑のまま", out)
+        self.assertIn(f"{base.HARNESS} accept", out)
+        self.assertIn(f"HARNESS_TIMEOUT=60 {base.HARNESS} accept", out)
 
     def test_nothing_is_said_while_the_command_is_the_same(self):
         self.w.write("app/note.txt", "受入に関係のない変更\n")

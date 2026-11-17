@@ -132,7 +132,7 @@ class AcceptanceEnvironmentTest(unittest.TestCase):
                 '[ -z "$LINEAR_API_KEY" ] && [ -z "$HARNESS_ROOT" ]\n', True)
         sha = w.commit("受入を置く")
         w.linear([issue("DEMO-1", "completed", w.auto("DEMO-1", sha))])
-        self.env = {"LINEAR_API_KEY": "lin_api_secret"}
+        self.env = {"LINEAR_API_KEY": "lin_api_secret", "HARNESS_ROOT": w.repo}
 
     def test_the_key_and_the_working_tree_are_not_handed_to_an_acceptance(self):
         self.assertIn("受入  緑 1 ／ 赤 0 ／ 未実装 0", self.w.run("status", env=self.env)[1])

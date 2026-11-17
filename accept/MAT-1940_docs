@@ -1,10 +1,24 @@
 #!/bin/sh
 # スキルは、In Progress にブランチか commit が要るのは自動の受入を持つIssueだと言い、見直しを任せるサブエージェントは建てたセッションのものではないと言う。README は、外すときに消す置き場、要る Python の版、LINEAR_API_KEY で叩くコマンドの例を言い、現在地の出力例に直し方の行がある
-s=skills/linear-workflow/SKILL.md
-grep -qF "自動の受入を持つIssueなら" "$s" || { echo "SKILL.md の状態の表が、In Progress の条件を自動の受入を持つIssueに限っていない"; exit 1; }
-grep -qF "建てたセッションのサブエージェントは" "$s" || { echo "SKILL.md が、建てたセッションのサブエージェントを別の文脈に数えないことを言っていない"; exit 1; }
-grep -F "外すときは" README.md | grep -qF ".git/harness" || { echo "README の外し方に、置き場（.git/harness）が無い"; exit 1; }
-grep -F "外すときは" README.md | grep -qF "harness-" || { echo "README の外し方に、.git の外の置き場（harness-…）が無い"; exit 1; }
-grep -qE "Python 3\.[0-9]+ 以上" README.md || { echo "README に、要る Python の版が無い"; exit 1; }
-grep -qF "api.linear.app/graphql" README.md || { echo "README に、LINEAR_API_KEY で叩くコマンドの例が無い"; exit 1; }
-grep -qF "の「引き直す」" README.md || { echo "README の現在地の出力例に、直し方の場所の行が無い"; exit 1; }
+python3 - <<'PY'
+from pathlib import Path
+import re
+readme = Path("README.md").read_text()
+skill = Path("skills/linear-workflow/SKILL.md").read_text()
+def need(ok, message):
+    if not ok:
+        raise SystemExit(message)
+need("Python 3.8 以上" in readme, "README の前提は Python 3.8 以上")
+need(re.search(r"Python 3\.8 以上[^\n]*git|git[^\n]*Python 3\.8 以上", readme, re.I), "README の前提に git が無い")
+need(any("In Progress" in line and "自動の受入を持つIssueなら" in line for line in skill.splitlines()), "In Progress の条件が自動の受入を持つIssueに限られていない")
+need(re.search(r"建てたセッションのサブエージェントは[^。\n]*別の文脈に数えない", skill), "建てたセッションの子を別の文脈に数えないことが未記載")
+remove = next((line for line in readme.splitlines() if "外すときは" in line), "")
+need(all(word in remove for word in (".git/harness", "harness-", "TMPDIR", "/tmp")), "外し方に .git 内外の置き場が無い")
+blocks = re.findall(r"```[^\n]*\n(.*?)```", readme, re.S)
+need(any(all(word in block for word in ("api.linear.app/graphql", "LINEAR_API_KEY", "Authorization", "--data-binary", "@-")) for block in blocks), "API の例が、鍵を認証に使って標準入力の JSON を送るコマンドになっていない")
+position = next((block for block in blocks if "現在地（導出" in block), "")
+need("の「引き直す」" in position, "直し方の場所が現在地の出力例の中に無い")
+for line in position.splitlines():
+    if "Done なのに受入が落ちている" in line or "受入が、Issueに書いた版" in line:
+        need("（" in line and "）" in line, "食い違いの行に直し方が無い: " + line)
+PY
