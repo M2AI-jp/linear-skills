@@ -43,12 +43,14 @@ check --wellformed が見るもの。
 import hashlib
 import fcntl
 import signal
+import calendar
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -326,16 +328,20 @@ def parse_lines(out):
     return results
 
 
-def accept_run(repo, sha):
-    """切り離した実行者。結果だけを残す。"""
+def acceptance_command(repo, sha):
     entry = None
     for name in ("AGENTS.md", "CLAUDE.md"):
         rc, text = repo.git("show", f"{sha}:{name}")
         entry = entry or (parse_entry(text) if rc == 0 else None)
-    cmd = entry and (quoted(entry.get("受入")) or re.split(r"[（(]", entry.get("受入", ""), maxsplit=1)[0].strip())
+    return entry and (quoted(entry.get("受入")) or re.split(r"[（(]", entry.get("受入", ""), maxsplit=1)[0].strip())
+
+
+def accept_run(repo, sha, command=None, tree=None):
+    """切り離した実行者。門では、基準のコマンドを一時の場所で走らせる。"""
+    cmd = acceptance_command(repo, sha) if command is None else command
     if not cmd:
         return {"error": "この版（" + sha[:7] + "）の入口に受入コマンドが無い", "absent": True}
-    tree = os.path.join(repo.store, "tree")
+    tree = tree or os.path.join(repo.store, "tree")
     rc = 0
     if not os.path.isdir(os.path.join(tree, ".git")):
         shutil.rmtree(tree, ignore_errors=True)
@@ -346,7 +352,7 @@ def accept_run(repo, sha):
         rc, _ = git("clean", "-ffdx", cwd=tree)
     if rc != 0:
         return {"error": "受入を走らせる場所を用意できなかった"}
-    rc, out, err = sh(cmd, tree, 3600, env={**os.environ, "HARNESS_ROOT": repo.root}, cascade=True)
+    rc, out, err = sh(cmd, tree, 3600, env=acceptance_env(), cascade=True)
     if rc is None:
         return {"error": "受入が " + err}
     results = parse_lines(out)
@@ -497,6 +503,10 @@ def accept_at(repo, sha, fresh=False, wait=None):
             observer.close()
 
 
+def acceptance_env():
+    return {k: v for k, v in os.environ.items() if k not in ("LINEAR_API_KEY", "HARNESS_ROOT")}
+
+
 def cmd_accept():
     names = sorted(os.listdir("accept")) if os.path.isdir("accept") else []
     red = False
@@ -512,7 +522,7 @@ def cmd_accept():
                 if t:
                     title = t.group(1).strip()
                     break
-        rc, out, err = sh("exec ./" + path, ".", TIMEOUT)
+        rc, out, err = sh("exec ./" + path, ".", TIMEOUT, env=acceptance_env())
         print(("緑" if rc == 0 else "赤"), m.group(1), title)
         if rc != 0:
             red = True
@@ -858,7 +868,7 @@ def built_reviews(repo, d):
         if not waiting or not times or any(x["type"] != "unstarted" for x in waiting):
             continue                                        # もう着手している。建て終わりの話ではない
         try:
-            closed = time.mktime(time.strptime((r.get("done_at") or "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            closed = calendar.timegm(time.strptime((r.get("done_at") or "")[:19], "%Y-%m-%dT%H:%M:%S"))
         except ValueError:
             closed = time.time()
         if not any(max(times) < started <= closed for started in sessions):   # 受入が置かれてから閉じるまでに始まったセッションが無い
@@ -949,6 +959,11 @@ def cmd_check(repo, entry, hook):
     return 1
 
 
+def own_hook(command, sub):
+    return bool(re.search(r"linear-workflow/harness(?=[\s\"';]|$)", command)
+                and re.search(r"\b" + sub + r"\b", command))
+
+
 def wellformed_faults(repo, entry, d):
     faults = [f"入口に「{k}」が無い" for k in ("正本", "Linearの叩き方", "受入", "モジュール", "確認が要る") if not entry.get(k)]
     if d.get("accept_pending"):
@@ -974,8 +989,20 @@ def wellformed_faults(repo, entry, d):
     # スキルを置いた側のフックが要る。.agents なら Codex、.claude なら Claude Code。どちらにも置いていなければ、どちらか
     placed = [name for name, folder in ((".claude/settings.json", ".claude"), (".codex/hooks.json", ".agents"))
               if os.path.exists(os.path.join(repo.root, folder, "skills", "linear-workflow", "SKILL.md"))]
+    for name in placed:
+        folder = ".claude" if name.startswith(".claude") else ".agents"
+        path = folder + "/skills/linear-workflow/harness"
+        mode = repo.git("ls-files", "--stage", "--", path)[1].split()
+        if not os.access(os.path.join(repo.root, path), os.X_OK) or not mode or mode[0] != "100755":
+            faults.append(f"{path} の実行ビットが無い。手元と git に実行ビットを記録する")
     for sub in ("status", "check"):
-        has = {name: bool(re.search(r"harness\W.{0,80}?\b" + sub, text)) for name, text in texts.items()}
+        has = {}
+        for name, text in texts.items():
+            try:
+                groups = json.loads(text).get("hooks", {}).get("SessionStart" if sub == "status" else "Stop", [])
+                has[name] = any(own_hook(h.get("command", ""), sub) for g in groups for h in g.get("hooks", []))
+            except (ValueError, AttributeError, TypeError):
+                has[name] = False
         for name in placed:
             if not has[name]:
                 faults.append(f"フックに harness {sub} が登録されていない（{name}）。harness setup を走らせる"
@@ -1022,7 +1049,23 @@ def cmd_gate(repo, base):
     if not before:
         print("基準の版に受入が無い（" + baseline.get("error", "受入コマンドが正常に終わり、結果の行が無い") + "）。通す")
         return 0
-    after = accept_at(repo, repo.head, fresh=True)
+    command = acceptance_command(repo, start)
+    current = acceptance_command(repo, repo.head)
+    if command != current:
+        print("入口の受入コマンドが、基準の版と違う")
+        print("  基準: " + (command or "（無し）"))
+        print("  この版: " + (current or "（無し）"))
+        if not repo.store:
+            print("基準の版の受入コマンドで、この版を走らせられなかった: 受入を走らせる場所が無い")
+            return 1
+        # この結果は、この版自身の現在地には使わない。並行する通常の受入とも場所を分ける。
+        with tempfile.TemporaryDirectory(dir=repo.store) as tree:
+            after = accept_run(repo, repo.head, command=command, tree=tree)
+        if after.get("error"):
+            print("基準の版の受入コマンドで、この版を走らせられなかった: " + after["error"])
+            return 1
+    else:
+        after = accept_at(repo, repo.head, fresh=True)
     now = after.get("results") or {}
     broken = [k for k, r in before.items() if r["ok"] and not (now.get(k) or {}).get("ok")]
     for k in sorted(broken):
@@ -1059,7 +1102,7 @@ def cmd_setup(repo):
             groups = hooks.setdefault(event, [])
             cmd = f"h={target}; [ -x \"$h\" ] && exec \"$h\" {sub} --hook; exit 0"
             mine = [h for g in groups for h in g.get("hooks", [])
-                    if re.search(r"harness\W.{0,80}?\b" + sub, h.get("command", ""))]
+                    if own_hook(h.get("command", ""), sub)]
             for h in mine:
                 h["command"] = cmd
             if not mine:
@@ -1078,7 +1121,10 @@ def cmd_setup(repo):
     print("Codex では、このリポジトリを信頼し、フックを確認する操作が初回に要る。済むまで、Codex はフックを黙って走らせない")
     if failed:
         print("ここには書けない。Codexのサンドボックスは .codex に書けないので、サンドボックスの外で harness setup をもう一度走らせる")
-    if "github.com" in repo.git("remote", "get-url", "origin")[1] and inside:
+    github = "github.com" in repo.git("remote", "get-url", "origin")[1]
+    if github and not inside:
+        print("リポジトリの外の harness なので、CI を作らなかった。リポジトリに置いた harness で setup を走らせる")
+    if github and inside:
         path = os.path.join(repo.root, ".github", "workflows", "accept.yml")
         if not os.path.exists(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
