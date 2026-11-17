@@ -18,7 +18,10 @@ blocks = re.findall(r"```[^\n]*\n(.*?)```", readme, re.S)
 need(any(all(word in block for word in ("api.linear.app/graphql", "LINEAR_API_KEY", "Authorization", "--data-binary", "@-")) for block in blocks), "API の例が、鍵を認証に使って標準入力の JSON を送るコマンドになっていない")
 position = next((block for block in blocks if "現在地（導出" in block), "")
 need("の「引き直す」" in position, "直し方の場所が現在地の出力例の中に無い")
-for line in position.splitlines():
-    if "Done なのに受入が落ちている" in line or "受入が、Issueに書いた版" in line:
-        need("（" in line and "）" in line, "食い違いの行に直し方が無い: " + line)
+for diagnostic, remedy in (
+    ("Done なのに受入が落ちている", "コードを直すか、Issueを開き直す"),
+    ("受入が、Issueに書いた版", "所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す"),
+):
+    need(any(diagnostic in line and remedy in line for line in position.splitlines()),
+         "現在地の出力例に診断と直し方が揃っていない: " + diagnostic)
 PY
