@@ -82,6 +82,20 @@ class OtherHooksTest(unittest.TestCase):
             self.assertTrue(any("linear-workflow/harness" in c and "status --hook" in c for c in start), start)
             self.assertTrue(any("linear-workflow/harness" in c and "check --hook" in c for c in stop), stop)
 
+    def test_an_earlier_form_of_its_own_hook_is_rewritten_in_place(self):
+        earlier = '"$CLAUDE_PROJECT_DIR"/.claude/skills/linear-workflow/harness check'   # 前の版が登録した形（--hook が無い）
+        for name in (".claude/settings.json", ".codex/hooks.json"):
+            data = self.w.json(name)
+            data["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": earlier}]})
+            self.w.write(name, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        rc, out = self.w.run("setup")
+        self.assertEqual(rc, 0, out)
+        for name in (".claude/settings.json", ".codex/hooks.json"):
+            stop = self.commands(name, "Stop")
+            self.assertNotIn(earlier, stop, name)                             # 足さずに、書き換える
+            self.assertEqual(len([c for c in stop if "linear-workflow/harness" in c]), 1, stop)
+            self.assertIn("npm run harness:check", stop, name)
+
     def test_the_build_check_does_not_take_them_for_its_own(self):
         base.HarnessTest.just_built(self, self.issues)
         rc, out = self.w.run("check", "--wellformed")
