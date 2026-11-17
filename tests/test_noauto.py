@@ -89,6 +89,7 @@ class NoAutomaticAcceptanceTest(unittest.TestCase):
     def test_the_merge_gate_refuses_a_green_acceptance_disappearing_into_empty_output(self):
         self.w.accept("DEMO-3", True)
         before = self.w.commit("緑の自動受入を置く")
+        self.w.git("rm", "-q", "accept/DEMO-3_check")             # 基準のコマンドでも緑だった受入が消える
         self.command("true")
         rc, out = self.w.run("gate", before)
         self.assertEqual(rc, 1, out)
