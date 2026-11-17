@@ -337,14 +337,18 @@ class HarnessTest(unittest.TestCase):
         w.write(".claude/settings.json", json.dumps({"permissions": {"deny": ["Bash(rm *)"]}}))
         self.assertEqual(w.run("setup")[0], 0)
         old = w.json(".claude/settings.json")
-        old["hooks"]["Stop"][0]["hooks"][0]["command"] = "x/harness check"      # 前の版が登録した形
+        old["hooks"]["Stop"][0]["hooks"][0]["command"] = "x/harness check"      # このスキル以外のフック
         w.write(".claude/settings.json", json.dumps(old))
-        self.assertEqual(w.run("setup")[0], 0)                                  # 足さずに、書き換える
+        self.assertEqual(w.run("setup")[0], 0)                                  # 他のフックを残し、自分のフックを足す
         settings = w.json(".claude/settings.json")
-        self.assertIn("check --hook", settings["hooks"]["Stop"][0]["hooks"][0]["command"])
+        commands = [h["command"] for group in settings["hooks"]["Stop"] for h in group["hooks"]]
+        self.assertIn("x/harness check", commands)
+        self.assertTrue(any("linear-workflow/harness" in c and "check --hook" in c for c in commands), commands)
+        self.assertEqual(w.run("setup")[0], 0)                                  # 再実行しても自分のフックを増やさない
+        self.assertEqual(w.json(".claude/settings.json"), settings)
         self.assertEqual(settings["permissions"], {"deny": ["Bash(rm *)"]})
         self.assertEqual(len(settings["hooks"]["SessionStart"]), 1)
-        self.assertEqual(len(settings["hooks"]["Stop"]), 1)
+        self.assertEqual(len(settings["hooks"]["Stop"]), 2)
         self.assertTrue(os.path.exists(os.path.join(w.repo, ".codex/hooks.json")))
         w.commit("フックを登録")
         rc, out = w.run("check", "--wellformed")
