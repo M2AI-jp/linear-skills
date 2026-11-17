@@ -76,7 +76,7 @@ def sh(cmd, cwd, timeout, stdin=None, env=None, cascade=False):
     def stop(sig=signal.SIGTERM):
         try:
             os.killpg(p.pid, sig)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
     def finish():
         stop()
@@ -408,12 +408,12 @@ def accept_at(repo, sha, fresh=False, wait=None):
                     if not active(path):
                         break
                     time.sleep(.02)
-            except (KeyError, ProcessLookupError):
+            except (KeyError, ProcessLookupError, PermissionError):
                 pass
             if active(path):
                 try:
                     os.kill(old["pid"], signal.SIGKILL)
-                except (KeyError, ProcessLookupError):
+                except (KeyError, ProcessLookupError, PermissionError):
                     pass
                 for _ in range(150):
                     if not active(path):
