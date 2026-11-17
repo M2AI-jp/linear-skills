@@ -11,6 +11,8 @@
 
 ## 導入
 
+前提は Python 3.8 以上と git。
+
 1. `skills/linear-workflow/` を、導入先リポジトリの `.claude/skills/linear-workflow/`（Claude Code）か `.agents/skills/linear-workflow/`（Codex）へフォルダごと置いて commit する
 2. そのリポジトリで「Linearで進められるようにして」と頼む。エージェントが Project・Milestone・Issue・受入を作り、`AGENTS.md` に入口を書き、`harness setup` でフックとCIを登録する
 3. `harness check --wellformed` が「整っている」と出れば、建て終わり
@@ -18,6 +20,12 @@
 GitHub に置くなら、`harness setup` が作った CI の検査（`gate`）を、人が main の必須チェックにする。必須チェックにしなければ、緑だった受入を赤にする変更も、赤いままマージできる。
 
 `harness` がLinearを読む手段は2つ。入口の「Linearの叩き方」に書いたコマンド（GraphQLのJSONを標準入力で受けて、応答のJSONを返すもの）か、環境変数 `LINEAR_API_KEY`。
+
+curl がある環境では、入口の「Linearの叩き方」に次のコマンドを書ける。環境変数 `LINEAR_API_KEY` に鍵を設定しておくと、標準入力のJSONをPOSTし、応答のJSONを返す。
+
+```sh
+curl --fail-with-body --silent --show-error -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H 'Content-Type: application/json' --data-binary @-
+```
 
 Codexは、人がそのリポジトリを信頼し、フックを確認するまで、フックを走らせない（初回だけ）。信頼されていないリポジトリのフックは、読まれもしない。
 
@@ -27,7 +35,7 @@ Codexのサンドボックスの中からは、`.codex` に書けない。既定
 
 このリポジトリの `AGENTS.md`、`DESIGN.md`、`accept/`、`tests/` は導入先へコピーしない。
 
-外すときは、置いたフォルダ、`AGENTS.md` の `## 進め方`、`.claude/settings.json` と `.codex/hooks.json` にある `harness` の登録、`.github/workflows/accept.yml` を消す。
+外すときは、置いたフォルダ、`AGENTS.md` の `## 進め方`、`.claude/settings.json` と `.codex/hooks.json` にある `harness` の登録、`.github/workflows/accept.yml`、このリポジトリの置き場（`.git/harness` と、`TMPDIR`・`/tmp` の `harness-…`。`HARNESS_STORE` を指定した場合はその中の `harness-…`）を消す。
 
 ## 建てたあとに起きること
 
@@ -47,8 +55,9 @@ Codexのサンドボックスの中からは、`.codex` に書けない。既定
       MAT-531 予約の取消（Todo）
 待ち  MAT-533 月次の集計（MAT-530 待ち）
 食い違い
-  MAT-512 今日の予約4件が一覧に出る … Done なのに受入が落ちている
-  MAT-498 受入が、Issueに書いた版（3f2a1c9）から変わった: accept/MAT-498_fee
+  MAT-512 今日の予約4件が一覧に出る … Done なのに受入が落ちている。コードを直すか、Issueを開き直す
+  MAT-498 受入が、Issueに書いた版（3f2a1c9）から変わった: accept/MAT-498_fee。見直しで直した・基準を人が変えたのなら、所在を新しい commit に書き直して理由をコメントに残す。そうでなければ戻す
+  直し方は .agents/skills/linear-workflow/SKILL.md の「引き直す」
 確認が要る  本番の設定変更、送信
 ```
 
